@@ -112,14 +112,17 @@ def build(state, mapping_id: int | None) -> ft.Control:
         filter_rows_column.controls = [r.row for r in filter_rows]
         filter_rows_column.update()
 
-    def add_filter_row(e=None, initial: FilterRule | None = None):
+    def _append_filter_row(initial: FilterRule | None = None):
         row = FilterRowControl(on_remove=remove_filter_row, initial=initial)
         filter_rows.append(row)
         filter_rows_column.controls = [r.row for r in filter_rows]
+
+    def add_filter_row(e=None):
+        _append_filter_row()
         filter_rows_column.update()
 
     for f in (record.filters if record else []):
-        add_filter_row(initial=f)
+        _append_filter_row(f)
 
     # --- save/cancel ---
     def _remove_pickers():
