@@ -78,6 +78,14 @@ def build(state, mapping_id: int | None) -> ft.Control:
     )
     refresh_schedule_value_row()
 
+    other_mappings = [m for m in repo.list_mappings(state.conn) if not record or m.id != record.id]
+    next_mapping_dropdown = ft.Dropdown(
+        label="When this finishes, then run", width=320,
+        value=str(record.next_mapping_id) if record and record.next_mapping_id else "",
+        options=[ft.DropdownOption(key="", text="Nothing — run independently")]
+        + [ft.DropdownOption(key=str(m.id), text=m.name) for m in other_mappings],
+    )
+
     error_text = ft.Text(color=ft.Colors.ERROR)
 
     # --- folder pickers ---
@@ -164,6 +172,7 @@ def build(state, mapping_id: int | None) -> ft.Control:
             schedule_interval_minutes=schedule_interval_minutes,
             schedule_daily_time=schedule_daily_time, filters=filters,
             filter_match_mode=match_mode_dropdown.value,
+            next_mapping_id=int(next_mapping_dropdown.value) if next_mapping_dropdown.value else None,
         )
         if is_new:
             repo.create_mapping(state.conn, **kwargs)
@@ -194,6 +203,8 @@ def build(state, mapping_id: int | None) -> ft.Control:
             ft.Divider(),
             ft.Row(controls=[schedule_dropdown]),
             schedule_value_row,
+            ft.Divider(),
+            ft.Row(controls=[next_mapping_dropdown]),
             ft.Divider(),
             ft.Row(
                 controls=[

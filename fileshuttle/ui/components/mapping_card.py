@@ -202,6 +202,10 @@ def build(state, record: MappingRecord) -> ft.Card:
         badges.append(_pill(ft.Icons.FILTER_ALT, f"{count_label} · match {mode_label}"))
     else:
         badges.append(_pill(ft.Icons.FILTER_ALT_OFF, "All files"))
+    if record.next_mapping_id is not None:
+        next_record = repo.get_mapping(state.conn, record.next_mapping_id)
+        next_name = next_record.name if next_record else "(deleted mapping)"
+        badges.append(_pill(ft.Icons.ARROW_FORWARD, f"Then runs: {next_name}"))
     badges_row = ft.Row(controls=badges, wrap=True, spacing=6)
 
     enabled_label = ft.Text("Enabled" if record.enabled else "Disabled", size=12,

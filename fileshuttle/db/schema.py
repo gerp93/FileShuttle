@@ -20,6 +20,7 @@ _STATEMENTS = (
                                      CHECK (schedule_type IN ('manual','interval','daily_at')),
         schedule_interval_minutes   INTEGER,
         schedule_daily_time         TEXT,
+        next_mapping_id             INTEGER REFERENCES mappings(id) ON DELETE SET NULL,
         created_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
         updated_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     )
@@ -48,7 +49,8 @@ _STATEMENTS = (
         files_errored          INTEGER NOT NULL DEFAULT 0,
         status                 TEXT NOT NULL CHECK (status IN ('success','partial','error')),
         error_message          TEXT,
-        undone_by_run_id       INTEGER REFERENCES run_history(id) ON DELETE SET NULL
+        undone_by_run_id       INTEGER REFERENCES run_history(id) ON DELETE SET NULL,
+        triggered_by_run_id    INTEGER REFERENCES run_history(id) ON DELETE SET NULL
     )
     """,
     """
@@ -71,8 +73,21 @@ _STATEMENTS = (
 )
 
 
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """Migrates a pre-existing database (from before `column` was added to
+    `table`'s CREATE statement above) by hand, since `CREATE TABLE IF NOT
+    EXISTS` only affects brand-new databases."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
     for statement in _STATEMENTS:
         conn.execute(statement)
+    _add_column_if_missing(conn, "mappings", "next_mapping_id",
+                            "next_mapping_id INTEGER REFERENCES mappings(id) ON DELETE SET NULL")
+    _add_column_if_missing(conn, "run_history", "triggered_by_run_id",
+                            "triggered_by_run_id INTEGER REFERENCES run_history(id) ON DELETE SET NULL")
     conn.commit()
