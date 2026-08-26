@@ -172,6 +172,18 @@ def test_run_history_cascades_on_mapping_delete(conn):
     assert repo.list_runs(conn) == []
 
 
+def test_next_mapping_id_round_trips_and_nulls_on_target_delete(conn):
+    conn.execute("PRAGMA foreign_keys = ON")
+    target_id = _create_sample_mapping(conn, name="Target")
+    chained_id = _create_sample_mapping(conn, name="Chained", next_mapping_id=target_id)
+
+    assert repo.get_mapping(conn, chained_id).next_mapping_id == target_id
+
+    repo.delete_mapping(conn, target_id)
+
+    assert repo.get_mapping(conn, chained_id).next_mapping_id is None
+
+
 def test_app_settings_get_set(conn):
     assert repo.get_setting(conn, "theme", default="hacker") == "hacker"
     repo.set_setting(conn, "theme", "retrowave")

@@ -11,22 +11,51 @@ from fileshuttle.engine.mover import run_mapping, undo_run
 
 
 def execute_mapping(conn: sqlite3.Connection, mapping_id: int, trigger_type: str) -> RunResult:
+    """Runs `mapping_id`, then follows its `next_mapping_id` chain (each
+    hop logged as its own run_history row, linked via triggered_by_run_id)
+    for as long as every mapping in the chain is one we haven't already run
+    in this call — that guard is what stops an accidental A->B->A cycle
+    from looping forever. Only the first mapping's own result is returned,
+    matching every existing caller, which only cares about the mapping it
+    asked to run."""
     record = repo.get_mapping(conn, mapping_id)
     if record is None:
         raise ValueError(f"No mapping with id {mapping_id}")
 
-    result = run_mapping(record.to_mapping_config())
-    status = _compute_status(result)
+    chain_results = _run_chain(conn, mapping_id, trigger_type, visited=set())
+    return chain_results[0][1]
 
-    repo.record_run(
-        conn,
-        mapping_id=mapping_id,
-        mapping_name_snapshot=record.name,
-        trigger_type=trigger_type,
-        result=result,
-        status=status,
-    )
-    return result
+
+def _run_chain(
+    conn: sqlite3.Connection, mapping_id: int, trigger_type: str, visited: set[int],
+) -> list[tuple[int, RunResult]]:
+    results: list[tuple[int, RunResult]] = []
+    current_id: int | None = mapping_id
+    triggered_by_run_id: int | None = None
+
+    while current_id is not None and current_id not in visited:
+        record = repo.get_mapping(conn, current_id)
+        if record is None:
+            break
+        visited.add(current_id)
+
+        result = run_mapping(record.to_mapping_config())
+        status = _compute_status(result)
+        run_id = repo.record_run(
+            conn,
+            mapping_id=current_id,
+            mapping_name_snapshot=record.name,
+            trigger_type=trigger_type,
+            result=result,
+            status=status,
+            triggered_by_run_id=triggered_by_run_id,
+        )
+        results.append((current_id, result))
+
+        triggered_by_run_id = run_id
+        current_id = record.next_mapping_id
+
+    return results
 
 
 def execute_undo(conn: sqlite3.Connection, run_id: int) -> RunResult:
@@ -70,10 +99,17 @@ def _base_mapping_name(conn: sqlite3.Connection, run) -> str:
 
 
 def execute_all_enabled(conn: sqlite3.Connection, trigger_type: str) -> list[tuple[int, RunResult]]:
-    return [
-        (record.id, execute_mapping(conn, record.id, trigger_type))
-        for record in repo.list_mappings(conn, enabled_only=True)
-    ]
+    """Runs every enabled mapping once. A shared `visited` set is threaded
+    through each mapping's chain so that a mapping already run as another
+    mapping's chain target isn't run a second time when the loop reaches it
+    directly."""
+    visited: set[int] = set()
+    all_results: list[tuple[int, RunResult]] = []
+    for record in repo.list_mappings(conn, enabled_only=True):
+        if record.id in visited:
+            continue
+        all_results.extend(_run_chain(conn, record.id, trigger_type, visited))
+    return all_results
 
 
 def _compute_status(result: RunResult) -> str:

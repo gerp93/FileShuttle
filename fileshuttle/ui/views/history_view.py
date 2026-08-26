@@ -2,6 +2,7 @@ import flet as ft
 
 from fileshuttle.db import repository as repo
 from fileshuttle.services.run_service import execute_undo
+from fileshuttle.ui.os_utils import open_folder
 
 _STATUS_COLORS = {
     "success": ft.Colors.GREEN,
@@ -82,12 +83,23 @@ def build(state) -> ft.Control:
             detail_column.update()
             chevron.update()
 
+        mapping = repo.get_mapping(state.conn, run.mapping_id)
+
+        action_controls: list[ft.Control] = []
+        if mapping is not None:
+            action_controls.append(ft.IconButton(
+                icon=ft.Icons.FOLDER_OPEN, tooltip=f"Open source folder\n{mapping.source_path}",
+                on_click=lambda e: open_folder(mapping.source_path),
+            ))
+            action_controls.append(ft.IconButton(
+                icon=ft.Icons.FOLDER, tooltip=f"Open destination folder\n{mapping.dest_path}",
+                on_click=lambda e: open_folder(mapping.dest_path),
+            ))
         if run.undone_by_run_id is not None:
-            action: ft.Control = ft.Text("Undone", size=12, italic=True, color=ft.Colors.ON_SURFACE_VARIANT)
+            action_controls.append(ft.Text("Undone", size=12, italic=True, color=ft.Colors.ON_SURFACE_VARIANT))
         elif run.files_moved > 0:
-            action = ft.TextButton("Undo", icon=ft.Icons.UNDO, on_click=lambda e: undo(run))
-        else:
-            action = ft.Container()
+            action_controls.append(ft.TextButton("Undo", icon=ft.Icons.UNDO, on_click=lambda e: undo(run)))
+        action: ft.Control = ft.Row(controls=action_controls, spacing=0)
 
         header = ft.Container(
             padding=10,
@@ -119,7 +131,9 @@ def build(state) -> ft.Control:
                                             wrap=True,
                                             controls=[
                                                 ft.Text(
-                                                    f"({_TRIGGER_LABELS.get(run.trigger_type, run.trigger_type)})",
+                                                    f"({_TRIGGER_LABELS.get(run.trigger_type, run.trigger_type)}"
+                                                    + (", chained" if run.triggered_by_run_id is not None else "")
+                                                    + ")",
                                                     size=12, color=ft.Colors.ON_SURFACE_VARIANT,
                                                 ),
                                                 ft.Text(run.started_at, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
