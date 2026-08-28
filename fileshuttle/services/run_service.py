@@ -113,12 +113,13 @@ def execute_all_enabled(conn: sqlite3.Connection, trigger_type: str) -> list[tup
 
 
 def _compute_status(result: RunResult) -> str:
-    """error: something errored and nothing moved. partial: a mix of
-    moves plus errors/skips. success: otherwise (including an all-skipped
-    run with no errors — skipping is an intentional policy outcome, not
-    a failure)."""
-    if result.files_errored and not result.files_moved:
+    """error: something errored and nothing moved or deleted. partial: a
+    mix of moves/deletes plus errors/skips. success: otherwise (including
+    an all-skipped run with no errors — skipping is an intentional policy
+    outcome, not a failure)."""
+    accomplished = result.files_moved + result.files_deleted
+    if result.files_errored and not accomplished:
         return "error"
-    if (result.files_errored or result.files_skipped) and result.files_moved:
+    if (result.files_errored or result.files_skipped) and accomplished:
         return "partial"
     return "success"

@@ -5,7 +5,7 @@ from fileshuttle.engine.mover import run_mapping, undo_run
 
 
 def _mapping(tmp_path: Path, recursive: bool, conflict_policy: str = "skip", filters=None,
-             filter_match_mode: str = "all") -> MappingConfig:
+             filter_match_mode: str = "all", action_type: str = "move") -> MappingConfig:
     return MappingConfig(
         id=1,
         name="test",
@@ -15,6 +15,7 @@ def _mapping(tmp_path: Path, recursive: bool, conflict_policy: str = "skip", fil
         conflict_policy=conflict_policy,
         filter_match_mode=filter_match_mode,
         filters=filters or [],
+        action_type=action_type,
     )
 
 
@@ -187,6 +188,63 @@ def test_undo_run_errors_when_file_missing_at_recorded_destination(tmp_path):
     result = undo_run([outcome])
     assert result.files_errored == 1
     assert result.files_moved == 0
+
+
+def test_delete_action_sends_matching_files_to_trash(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "keep.txt").write_text("keep")
+    (source / "skip.log").write_text("skip")
+
+    import fileshuttle.engine.mover as mover_module
+
+    trashed: list[str] = []
+
+    def fake_send2trash(path):
+        trashed.append(path)
+        Path(path).unlink()
+
+    monkeypatch.setattr(mover_module, "send2trash", fake_send2trash)
+
+    from fileshuttle.engine.models import FilterRule
+
+    mapping = _mapping(
+        tmp_path, recursive=False, action_type="delete",
+        filters=[FilterRule("extension", "equals", "txt")],
+    )
+    result = run_mapping(mapping)
+
+    assert result.files_deleted == 1
+    assert result.files_moved == 0
+    assert trashed == [str(source / "keep.txt")]
+    assert not (source / "keep.txt").exists()
+    assert (source / "skip.log").exists()  # untouched, didn't match filter
+    assert not (tmp_path / "dest").exists()  # delete action never creates a destination
+
+    deleted_outcome = result.file_outcomes[0]
+    assert deleted_outcome.outcome == "deleted"
+    assert deleted_outcome.dest_path is None
+
+
+def test_delete_action_failure_records_error_and_continues(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a.txt").write_text("a")
+    (source / "b.txt").write_text("b")
+
+    import fileshuttle.engine.mover as mover_module
+
+    def flaky_send2trash(path):
+        if str(path).endswith("a.txt"):
+            raise OSError("simulated failure")
+
+    monkeypatch.setattr(mover_module, "send2trash", flaky_send2trash)
+
+    result = run_mapping(_mapping(tmp_path, recursive=False, action_type="delete"))
+
+    assert result.files_errored == 1
+    assert result.files_deleted == 1
+    assert (source / "a.txt").exists()  # left in place since the delete failed
 
 
 def test_undo_run_skips_when_something_already_at_original_source(tmp_path):

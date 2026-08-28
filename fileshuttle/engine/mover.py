@@ -8,6 +8,8 @@ from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
+from send2trash import send2trash
+
 from .filters import evaluate_filters
 from .models import FileOutcome, MappingConfig, RunResult
 
@@ -15,8 +17,8 @@ from .models import FileOutcome, MappingConfig, RunResult
 def run_mapping(mapping: MappingConfig) -> RunResult:
     started_at = datetime.now()
     source_root = Path(mapping.source_path)
-    dest_root = Path(mapping.dest_path)
     outcomes: list[FileOutcome] = []
+    dest_root = Path(mapping.dest_path) if mapping.action_type == "move" else None
 
     for file_path in iter_candidate_files(source_root, mapping.recursive):
         try:
@@ -26,6 +28,14 @@ def run_mapping(mapping: MappingConfig) -> RunResult:
             continue
 
         if not evaluate_filters(file_path, stat_info, mapping.filters, mapping.filter_match_mode):
+            continue
+
+        if mapping.action_type == "delete":
+            try:
+                send2trash(str(file_path))
+                outcomes.append(FileOutcome(str(file_path), None, "deleted", None, stat_info.st_size))
+            except Exception as exc:
+                outcomes.append(FileOutcome(str(file_path), None, "error", str(exc), stat_info.st_size))
             continue
 
         dest_path = resolve_destination(source_root, dest_root, file_path)

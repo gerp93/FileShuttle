@@ -8,6 +8,11 @@ from fileshuttle.db import repository as repo
 from fileshuttle.engine.models import FilterRule
 from fileshuttle.ui.components.filter_row import FilterRowControl
 
+ACTION_TYPES = [
+    ("move", "Move to destination folder"),
+    ("delete", "Delete (move to Recycle Bin)"),
+]
+
 CONFLICT_POLICIES = [
     ("skip", "Skip existing files"),
     ("overwrite", "Overwrite existing files"),
@@ -45,6 +50,33 @@ def build(state, mapping_id: int | None) -> ft.Control:
         value=record.conflict_policy if record else "skip",
         options=[ft.DropdownOption(key=k, text=t) for k, t in CONFLICT_POLICIES],
     )
+
+    action_dropdown = ft.Dropdown(
+        label="Action", width=320,
+        value=record.action_type if record else "move",
+        options=[ft.DropdownOption(key=k, text=t) for k, t in ACTION_TYPES],
+    )
+    delete_warning = ft.Text(
+        "Matching files are moved to the Recycle Bin — not to a destination folder. "
+        "This cannot be undone from within FileShuttle.",
+        size=12, color=ft.Colors.ERROR, visible=(record.action_type == "delete") if record else False,
+    )
+    dest_row = ft.Row(controls=[dest_field, ft.IconButton(icon=ft.Icons.FOLDER_OPEN, tooltip="Browse",
+                                                            on_click=lambda e: browse_dest(e))],
+                       visible=(record.action_type != "delete") if record else True)
+    conflict_row = ft.Row(controls=[conflict_dropdown],
+                           visible=(record.action_type != "delete") if record else True)
+
+    def on_action_type_change(e):
+        is_delete = action_dropdown.value == "delete"
+        dest_row.visible = not is_delete
+        conflict_row.visible = not is_delete
+        delete_warning.visible = is_delete
+        dest_row.update()
+        conflict_row.update()
+        delete_warning.update()
+
+    action_dropdown.on_select = on_action_type_change
 
     interval_field = ft.TextField(
         label="Interval (minutes)", width=200,
@@ -141,10 +173,14 @@ def build(state, mapping_id: int | None) -> ft.Control:
     def save(e):
         name = (name_field.value or "").strip()
         source_path = (source_field.value or "").strip()
-        dest_path = (dest_field.value or "").strip()
+        action_type = action_dropdown.value
+        dest_path = (dest_field.value or "").strip() if action_type == "move" else ""
 
-        if not name or not source_path or not dest_path:
-            error_text.value = "Name, source folder, and destination folder are all required."
+        if not name or not source_path or (action_type == "move" and not dest_path):
+            error_text.value = (
+                "Name, source folder, and destination folder are all required."
+                if action_type == "move" else "Name and source folder are required."
+            )
             error_text.update()
             return
 
@@ -166,7 +202,7 @@ def build(state, mapping_id: int | None) -> ft.Control:
 
         filters = [row.to_filter_rule() for row in filter_rows]
         kwargs = dict(
-            name=name, source_path=source_path, dest_path=dest_path,
+            name=name, source_path=source_path, dest_path=dest_path, action_type=action_type,
             recursive=recursive_switch.value, conflict_policy=conflict_dropdown.value,
             enabled=enabled_switch.value, schedule_type=schedule_type,
             schedule_interval_minutes=schedule_interval_minutes,
@@ -195,10 +231,11 @@ def build(state, mapping_id: int | None) -> ft.Control:
             name_field,
             ft.Row(controls=[source_field, ft.IconButton(icon=ft.Icons.FOLDER_OPEN, tooltip="Browse",
                                                            on_click=browse_source)]),
-            ft.Row(controls=[dest_field, ft.IconButton(icon=ft.Icons.FOLDER_OPEN, tooltip="Browse",
-                                                         on_click=browse_dest)]),
+            action_dropdown,
+            delete_warning,
+            dest_row,
             recursive_switch,
-            conflict_dropdown,
+            conflict_row,
             enabled_switch,
             ft.Divider(),
             ft.Row(controls=[schedule_dropdown]),
