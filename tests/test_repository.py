@@ -47,6 +47,14 @@ def test_create_and_get_mapping_roundtrip(conn):
     assert record.filters[0].field == "extension"
 
 
+def test_action_type_defaults_to_move_and_round_trips_delete(conn):
+    move_id = _create_sample_mapping(conn)
+    assert repo.get_mapping(conn, move_id).action_type == "move"
+
+    delete_id = _create_sample_mapping(conn, action_type="delete", dest_path="")
+    assert repo.get_mapping(conn, delete_id).action_type == "delete"
+
+
 def test_filter_match_mode_defaults_to_all_and_round_trips_any(conn):
     default_id = _create_sample_mapping(conn)
     assert repo.get_mapping(conn, default_id).filter_match_mode == "all"

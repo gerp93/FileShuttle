@@ -2,6 +2,7 @@ flet[all]
 apscheduler
 pystray
 Pillow
+send2trash
 
 # Theming, self-update, and DB location (see gerp93/KVG_Standards)
 visual-assault-flet @ git+https://github.com/gerp93/VisualAssault.git@v0.2.0#subdirectory=packages/flet

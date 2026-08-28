@@ -16,6 +16,7 @@ class MappingRecord:
     source_path: str
     dest_path: str
     recursive: bool
+    action_type: str
     conflict_policy: str
     filter_match_mode: str
     enabled: bool
@@ -37,6 +38,7 @@ class MappingRecord:
             conflict_policy=self.conflict_policy,
             filter_match_mode=self.filter_match_mode,
             filters=self.filters,
+            action_type=self.action_type,
         )
 
 
@@ -49,6 +51,7 @@ class RunSummary:
     started_at: str
     finished_at: str
     files_moved: int
+    files_deleted: int
     files_skipped: int
     files_errored: int
     status: str
@@ -64,16 +67,16 @@ def create_mapping(
     recursive: bool, conflict_policy: str, enabled: bool, schedule_type: str,
     schedule_interval_minutes: int | None, schedule_daily_time: str | None,
     filters: list[FilterRule], filter_match_mode: str = "all",
-    next_mapping_id: int | None = None,
+    next_mapping_id: int | None = None, action_type: str = "move",
 ) -> int:
     cur = conn.execute(
         """
         INSERT INTO mappings
-            (name, source_path, dest_path, recursive, conflict_policy, filter_match_mode,
+            (name, source_path, dest_path, recursive, action_type, conflict_policy, filter_match_mode,
              enabled, schedule_type, schedule_interval_minutes, schedule_daily_time, next_mapping_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (name, source_path, dest_path, int(recursive), conflict_policy, filter_match_mode,
+        (name, source_path, dest_path, int(recursive), action_type, conflict_policy, filter_match_mode,
          int(enabled), schedule_type, schedule_interval_minutes, schedule_daily_time, next_mapping_id),
     )
     mapping_id = cur.lastrowid
@@ -88,17 +91,18 @@ def update_mapping(
     schedule_type: str, schedule_interval_minutes: int | None,
     schedule_daily_time: str | None, filters: list[FilterRule],
     filter_match_mode: str = "all", next_mapping_id: int | None = None,
+    action_type: str = "move",
 ) -> None:
     conn.execute(
         """
         UPDATE mappings SET
-            name = ?, source_path = ?, dest_path = ?, recursive = ?,
+            name = ?, source_path = ?, dest_path = ?, recursive = ?, action_type = ?,
             conflict_policy = ?, filter_match_mode = ?, enabled = ?, schedule_type = ?,
             schedule_interval_minutes = ?, schedule_daily_time = ?, next_mapping_id = ?,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ?
         """,
-        (name, source_path, dest_path, int(recursive), conflict_policy, filter_match_mode,
+        (name, source_path, dest_path, int(recursive), action_type, conflict_policy, filter_match_mode,
          int(enabled), schedule_type, schedule_interval_minutes, schedule_daily_time,
          next_mapping_id, mapping_id),
     )
@@ -147,6 +151,7 @@ def _row_to_record(conn: sqlite3.Connection, row: sqlite3.Row) -> MappingRecord:
         source_path=row["source_path"],
         dest_path=row["dest_path"],
         recursive=bool(row["recursive"]),
+        action_type=row["action_type"],
         conflict_policy=row["conflict_policy"],
         filter_match_mode=row["filter_match_mode"],
         enabled=bool(row["enabled"]),
@@ -179,12 +184,13 @@ def record_run(
         """
         INSERT INTO run_history
             (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
-             files_moved, files_skipped, files_errored, status, error_message, triggered_by_run_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             files_moved, files_deleted, files_skipped, files_errored, status, error_message,
+             triggered_by_run_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (mapping_id, mapping_name_snapshot, trigger_type,
          result.started_at.isoformat(), result.finished_at.isoformat(),
-         result.files_moved, result.files_skipped, result.files_errored,
+         result.files_moved, result.files_deleted, result.files_skipped, result.files_errored,
          status, error_message, triggered_by_run_id),
     )
     run_id = cur.lastrowid
@@ -240,7 +246,8 @@ def _row_to_run_summary(r: sqlite3.Row) -> RunSummary:
     return RunSummary(
         id=r["id"], mapping_id=r["mapping_id"], mapping_name_snapshot=r["mapping_name_snapshot"],
         trigger_type=r["trigger_type"], started_at=r["started_at"], finished_at=r["finished_at"],
-        files_moved=r["files_moved"], files_skipped=r["files_skipped"], files_errored=r["files_errored"],
+        files_moved=r["files_moved"], files_deleted=r["files_deleted"],
+        files_skipped=r["files_skipped"], files_errored=r["files_errored"],
         status=r["status"], error_message=r["error_message"], undone_by_run_id=r["undone_by_run_id"],
         triggered_by_run_id=r["triggered_by_run_id"],
     )

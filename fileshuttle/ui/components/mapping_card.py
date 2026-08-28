@@ -72,12 +72,14 @@ def _relative_time(iso_str: str) -> str:
     return when.strftime("%Y-%m-%d")
 
 
-def _stats_line(run_count: int, last_run) -> str:
+def _stats_line(run_count: int, last_run, action_type: str = "move") -> str:
     if last_run is None:
         stats = "Never run"
     else:
+        accomplished_label = "deleted" if action_type == "delete" else "moved"
+        accomplished = last_run.files_deleted if action_type == "delete" else last_run.files_moved
         stats = (
-            f"Last run {_relative_time(last_run.started_at)} — moved {last_run.files_moved}, "
+            f"Last run {_relative_time(last_run.started_at)} — {accomplished_label} {accomplished}, "
             f"skipped {last_run.files_skipped}, errored {last_run.files_errored}"
         )
     run_count_label = f"{run_count} run" + ("s" if run_count != 1 else "") + " total"
@@ -124,7 +126,8 @@ def _pill(icon: str, text: str) -> ft.Container:
 def build(state, record: MappingRecord) -> ft.Card:
     status_text = ft.Text(size=12, color=ft.Colors.ON_SURFACE_VARIANT)
     run_count, last_run = repo.get_run_stats(state.conn, record.id)
-    stats_text = ft.Text(_stats_line(run_count, last_run), size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+    stats_text = ft.Text(_stats_line(run_count, last_run, record.action_type), size=12,
+                          color=ft.Colors.ON_SURFACE_VARIANT)
 
     def run_now(e):
         run_button.disabled = True
@@ -132,12 +135,14 @@ def build(state, record: MappingRecord) -> ft.Card:
         state.page.update()
         try:
             result = execute_mapping(state.conn, record.id, "manual")
+            accomplished_label = "Deleted" if record.action_type == "delete" else "Moved"
+            accomplished = result.files_deleted if record.action_type == "delete" else result.files_moved
             status_text.value = (
-                f"Moved {result.files_moved}, skipped {result.files_skipped}, "
+                f"{accomplished_label} {accomplished}, skipped {result.files_skipped}, "
                 f"errored {result.files_errored}"
             )
             new_count, new_last_run = repo.get_run_stats(state.conn, record.id)
-            stats_text.value = _stats_line(new_count, new_last_run)
+            stats_text.value = _stats_line(new_count, new_last_run, record.action_type)
         except Exception as exc:
             status_text.value = f"Run failed: {exc}"
         run_button.disabled = False
@@ -177,12 +182,22 @@ def build(state, record: MappingRecord) -> ft.Card:
     run_button = ft.ElevatedButton("Run Now", icon=ft.Icons.PLAY_ARROW, on_click=run_now)
 
     # --- source -> destination flow, each path level as its own chip ---
-    dest_row = _breadcrumb_row(ft.Icons.FOLDER, "To", record.dest_path)
-    if record.recursive:
-        dest_row.controls.append(
-            ft.Icon(ft.Icons.ACCOUNT_TREE, size=14, color=ft.Colors.ON_SURFACE_VARIANT,
-                    tooltip="Includes subfolders")
+    if record.action_type == "delete":
+        dest_row: ft.Control = ft.Row(
+            spacing=6,
+            controls=[
+                ft.Icon(ft.Icons.DELETE_FOREVER, size=15, color=ft.Colors.ERROR),
+                ft.Text("Delete matching files (Recycle Bin)", size=12,
+                        weight=ft.FontWeight.BOLD, color=ft.Colors.ERROR),
+            ],
         )
+    else:
+        dest_row = _breadcrumb_row(ft.Icons.FOLDER, "To", record.dest_path)
+        if record.recursive:
+            dest_row.controls.append(
+                ft.Icon(ft.Icons.ACCOUNT_TREE, size=14, color=ft.Colors.ON_SURFACE_VARIANT,
+                        tooltip="Includes subfolders")
+            )
     path_section = ft.Column(
         spacing=4,
         controls=[
@@ -192,10 +207,13 @@ def build(state, record: MappingRecord) -> ft.Card:
     )
 
     # --- schedule / conflict / filter badges ---
-    badges = [
-        _pill(ft.Icons.SCHEDULE, schedule_summary(record)),
-        _pill(ft.Icons.MERGE_TYPE, _CONFLICT_LABELS.get(record.conflict_policy, record.conflict_policy)),
-    ]
+    badges = [_pill(ft.Icons.SCHEDULE, schedule_summary(record))]
+    if record.action_type == "delete":
+        badges.append(_pill(ft.Icons.DELETE_FOREVER, "Moves to Recycle Bin"))
+    else:
+        badges.append(
+            _pill(ft.Icons.MERGE_TYPE, _CONFLICT_LABELS.get(record.conflict_policy, record.conflict_policy))
+        )
     if record.filters:
         mode_label = "ALL" if record.filter_match_mode == "all" else "ANY"
         count_label = f"{len(record.filters)} filter" + ("s" if len(record.filters) != 1 else "")

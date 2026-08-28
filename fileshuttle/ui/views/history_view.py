@@ -91,10 +91,11 @@ def build(state) -> ft.Control:
                 icon=ft.Icons.FOLDER_OPEN, tooltip=f"Open source folder\n{mapping.source_path}",
                 on_click=lambda e: open_folder(mapping.source_path),
             ))
-            action_controls.append(ft.IconButton(
-                icon=ft.Icons.FOLDER, tooltip=f"Open destination folder\n{mapping.dest_path}",
-                on_click=lambda e: open_folder(mapping.dest_path),
-            ))
+            if mapping.action_type == "move":
+                action_controls.append(ft.IconButton(
+                    icon=ft.Icons.FOLDER, tooltip=f"Open destination folder\n{mapping.dest_path}",
+                    on_click=lambda e: open_folder(mapping.dest_path),
+                ))
         if run.undone_by_run_id is not None:
             action_controls.append(ft.Text("Undone", size=12, italic=True, color=ft.Colors.ON_SURFACE_VARIANT))
         elif run.files_moved > 0:
@@ -138,8 +139,12 @@ def build(state) -> ft.Control:
                                                 ),
                                                 ft.Text(run.started_at, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
                                                 ft.Text(
-                                                    f"moved {run.files_moved} / skipped {run.files_skipped} "
-                                                    f"/ errored {run.files_errored}",
+                                                    (
+                                                        f"deleted {run.files_deleted}"
+                                                        if run.files_deleted
+                                                        else f"moved {run.files_moved}"
+                                                    )
+                                                    + f" / skipped {run.files_skipped} / errored {run.files_errored}",
                                                     size=12,
                                                 ),
                                             ],
