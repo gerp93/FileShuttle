@@ -125,10 +125,12 @@ def build(state) -> ft.Control:
             padding=10,
             content=ft.Row(
                 controls=[
-                    ft.Container(
-                        on_click=toggle,
-                        expand=True,
-                        content=ft.Row(
+                    ft.GestureDetector(
+                        mouse_cursor=ft.MouseCursor.CLICK,
+                        on_tap=toggle,
+                        content=ft.Container(
+                            expand=True,
+                            content=ft.Row(
                             controls=[
                                 chevron,
                                 ft.Column(
@@ -170,6 +172,7 @@ def build(state) -> ft.Control:
                                     ],
                                 ),
                             ],
+                            ),
                         ),
                     ),
                     action,

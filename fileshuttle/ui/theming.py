@@ -165,14 +165,27 @@ def get_theme(theme_id: str) -> ft.Theme | None:
         # that label directly on the page/card background rather than on
         # a primary-colored fill. Styling each explicitly, once, here
         # fixes every button in the app instead of every call site.
+        # Flutter 3.41+ defaults Material buttons to BASIC (arrow) on
+        # desktop — restore the pointing-hand cursor app-wide.
+        _click = ft.MouseCursor.CLICK
         button_theme=ft.ButtonTheme(
-            style=ft.ButtonStyle(bgcolor=primary, color=_readable_on(primary))
+            style=ft.ButtonStyle(
+                bgcolor=primary, color=_readable_on(primary), mouse_cursor=_click,
+            )
         ),
         outlined_button_theme=ft.OutlinedButtonTheme(
-            style=ft.ButtonStyle(color=foreground, side=ft.BorderSide(width=1, color=theme["border"]))
+            style=ft.ButtonStyle(
+                color=foreground,
+                side=ft.BorderSide(width=1, color=theme["border"]),
+                mouse_cursor=_click,
+            )
         ),
-        text_button_theme=ft.TextButtonTheme(style=ft.ButtonStyle(color=foreground)),
-        icon_button_theme=ft.IconButtonTheme(style=ft.ButtonStyle(color=foreground)),
+        text_button_theme=ft.TextButtonTheme(
+            style=ft.ButtonStyle(color=foreground, mouse_cursor=_click)
+        ),
+        icon_button_theme=ft.IconButtonTheme(
+            style=ft.ButtonStyle(color=foreground, mouse_cursor=_click)
+        ),
         # Cards/dialogs default to a Material tonal-elevation color we
         # never define (no `surface_tint`/seed color here), not to
         # `color_scheme.surface` — pin them explicitly so every card
