@@ -51,6 +51,7 @@ class RunSummary:
     started_at: str
     finished_at: str
     files_moved: int
+    files_copied: int
     files_deleted: int
     files_skipped: int
     files_errored: int
@@ -184,14 +185,14 @@ def record_run(
         """
         INSERT INTO run_history
             (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
-             files_moved, files_deleted, files_skipped, files_errored, status, error_message,
+             files_moved, files_copied, files_deleted, files_skipped, files_errored, status, error_message,
              triggered_by_run_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (mapping_id, mapping_name_snapshot, trigger_type,
          result.started_at.isoformat(), result.finished_at.isoformat(),
-         result.files_moved, result.files_deleted, result.files_skipped, result.files_errored,
-         status, error_message, triggered_by_run_id),
+         result.files_moved, result.files_copied, result.files_deleted, result.files_skipped,
+         result.files_errored, status, error_message, triggered_by_run_id),
     )
     run_id = cur.lastrowid
     conn.executemany(
@@ -246,7 +247,7 @@ def _row_to_run_summary(r: sqlite3.Row) -> RunSummary:
     return RunSummary(
         id=r["id"], mapping_id=r["mapping_id"], mapping_name_snapshot=r["mapping_name_snapshot"],
         trigger_type=r["trigger_type"], started_at=r["started_at"], finished_at=r["finished_at"],
-        files_moved=r["files_moved"], files_deleted=r["files_deleted"],
+        files_moved=r["files_moved"], files_copied=r["files_copied"], files_deleted=r["files_deleted"],
         files_skipped=r["files_skipped"], files_errored=r["files_errored"],
         status=r["status"], error_message=r["error_message"], undone_by_run_id=r["undone_by_run_id"],
         triggered_by_run_id=r["triggered_by_run_id"],

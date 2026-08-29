@@ -72,12 +72,23 @@ def _relative_time(iso_str: str) -> str:
     return when.strftime("%Y-%m-%d")
 
 
+_ACCOMPLISHED_LABELS = {"move": "moved", "copy": "copied", "delete": "deleted"}
+
+
+def _accomplished(run, action_type: str) -> int:
+    if action_type == "copy":
+        return run.files_copied
+    if action_type == "delete":
+        return run.files_deleted
+    return run.files_moved
+
+
 def _stats_line(run_count: int, last_run, action_type: str = "move") -> str:
     if last_run is None:
         stats = "Never run"
     else:
-        accomplished_label = "deleted" if action_type == "delete" else "moved"
-        accomplished = last_run.files_deleted if action_type == "delete" else last_run.files_moved
+        accomplished_label = _ACCOMPLISHED_LABELS.get(action_type, "moved")
+        accomplished = _accomplished(last_run, action_type)
         stats = (
             f"Last run {_relative_time(last_run.started_at)} — {accomplished_label} {accomplished}, "
             f"skipped {last_run.files_skipped}, errored {last_run.files_errored}"
@@ -135,8 +146,8 @@ def build(state, record: MappingRecord) -> ft.Card:
         state.page.update()
         try:
             result = execute_mapping(state.conn, record.id, "manual")
-            accomplished_label = "Deleted" if record.action_type == "delete" else "Moved"
-            accomplished = result.files_deleted if record.action_type == "delete" else result.files_moved
+            accomplished_label = _ACCOMPLISHED_LABELS.get(record.action_type, "moved").capitalize()
+            accomplished = _accomplished(result, record.action_type)
             status_text.value = (
                 f"{accomplished_label} {accomplished}, skipped {result.files_skipped}, "
                 f"errored {result.files_errored}"
@@ -192,7 +203,8 @@ def build(state, record: MappingRecord) -> ft.Card:
             ],
         )
     else:
-        dest_row = _breadcrumb_row(ft.Icons.FOLDER, "To", record.dest_path)
+        dest_row = _breadcrumb_row(ft.Icons.FOLDER, "Copy to" if record.action_type == "copy" else "To",
+                                    record.dest_path)
         if record.recursive:
             dest_row.controls.append(
                 ft.Icon(ft.Icons.ACCOUNT_TREE, size=14, color=ft.Colors.ON_SURFACE_VARIANT,
@@ -211,6 +223,8 @@ def build(state, record: MappingRecord) -> ft.Card:
     if record.action_type == "delete":
         badges.append(_pill(ft.Icons.DELETE_FOREVER, "Moves to Recycle Bin"))
     else:
+        if record.action_type == "copy":
+            badges.append(_pill(ft.Icons.CONTENT_COPY, "Keeps the original"))
         badges.append(
             _pill(ft.Icons.MERGE_TYPE, _CONFLICT_LABELS.get(record.conflict_policy, record.conflict_policy))
         )

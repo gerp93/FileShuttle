@@ -10,6 +10,7 @@ from fileshuttle.ui.components.filter_row import FilterRowControl
 
 ACTION_TYPES = [
     ("move", "Move to destination folder"),
+    ("copy", "Copy to destination folder"),
     ("delete", "Delete (move to Recycle Bin)"),
 ]
 
@@ -174,12 +175,12 @@ def build(state, mapping_id: int | None) -> ft.Control:
         name = (name_field.value or "").strip()
         source_path = (source_field.value or "").strip()
         action_type = action_dropdown.value
-        dest_path = (dest_field.value or "").strip() if action_type == "move" else ""
+        dest_path = (dest_field.value or "").strip() if action_type in ("move", "copy") else ""
 
-        if not name or not source_path or (action_type == "move" and not dest_path):
+        if not name or not source_path or (action_type in ("move", "copy") and not dest_path):
             error_text.value = (
                 "Name, source folder, and destination folder are all required."
-                if action_type == "move" else "Name and source folder are required."
+                if action_type in ("move", "copy") else "Name and source folder are required."
             )
             error_text.update()
             return

@@ -20,7 +20,7 @@ CONFLICT_POLICIES = ("overwrite", "skip", "auto_rename")
 
 FILTER_MATCH_MODES = ("all", "any")
 
-ACTION_TYPES = ("move", "delete")
+ACTION_TYPES = ("move", "copy", "delete")
 
 
 @dataclass
@@ -40,14 +40,14 @@ class MappingConfig:
     conflict_policy: str
     filter_match_mode: str = "all"  # 'all' (AND, every filter must match) or 'any' (OR)
     filters: list[FilterRule] = field(default_factory=list)
-    action_type: str = "move"  # 'move' (to dest_path) or 'delete' (send to Recycle Bin)
+    action_type: str = "move"  # 'move' or 'copy' (both to dest_path) or 'delete' (send to Recycle Bin)
 
 
 @dataclass
 class FileOutcome:
     source_path: str
     dest_path: str | None
-    outcome: str  # 'moved' | 'deleted' | 'skipped' | 'error'
+    outcome: str  # 'moved' | 'copied' | 'deleted' | 'skipped' | 'error'
     reason: str | None
     size_bytes: int | None
 
@@ -61,6 +61,10 @@ class RunResult:
     @property
     def files_moved(self) -> int:
         return sum(1 for f in self.file_outcomes if f.outcome == "moved")
+
+    @property
+    def files_copied(self) -> int:
+        return sum(1 for f in self.file_outcomes if f.outcome == "copied")
 
     @property
     def files_deleted(self) -> int:

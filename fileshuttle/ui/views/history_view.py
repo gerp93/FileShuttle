@@ -91,7 +91,7 @@ def build(state) -> ft.Control:
                 icon=ft.Icons.FOLDER_OPEN, tooltip=f"Open source folder\n{mapping.source_path}",
                 on_click=lambda e: open_folder(mapping.source_path),
             ))
-            if mapping.action_type == "move":
+            if mapping.action_type in ("move", "copy"):
                 action_controls.append(ft.IconButton(
                     icon=ft.Icons.FOLDER, tooltip=f"Open destination folder\n{mapping.dest_path}",
                     on_click=lambda e: open_folder(mapping.dest_path),
@@ -142,6 +142,8 @@ def build(state) -> ft.Control:
                                                     (
                                                         f"deleted {run.files_deleted}"
                                                         if run.files_deleted
+                                                        else f"copied {run.files_copied}"
+                                                        if run.files_copied
                                                         else f"moved {run.files_moved}"
                                                     )
                                                     + f" / skipped {run.files_skipped} / errored {run.files_errored}",
