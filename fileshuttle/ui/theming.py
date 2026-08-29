@@ -133,6 +133,10 @@ def get_theme(theme_id: str) -> ft.Theme | None:
     container_highest = _elevated_shade(surface, foreground)
     text_muted = _best_readable(theme["textMuted"], surface, container_highest)
 
+    # Flutter 3.41+ defaults Material buttons to BASIC (arrow) on desktop —
+    # restore the pointing-hand cursor app-wide.
+    _click = ft.MouseCursor.CLICK
+
     return ft.Theme(
         color_scheme=ft.ColorScheme(
             primary=primary,
@@ -165,9 +169,6 @@ def get_theme(theme_id: str) -> ft.Theme | None:
         # that label directly on the page/card background rather than on
         # a primary-colored fill. Styling each explicitly, once, here
         # fixes every button in the app instead of every call site.
-        # Flutter 3.41+ defaults Material buttons to BASIC (arrow) on
-        # desktop — restore the pointing-hand cursor app-wide.
-        _click = ft.MouseCursor.CLICK
         button_theme=ft.ButtonTheme(
             style=ft.ButtonStyle(
                 bgcolor=primary, color=_readable_on(primary), mouse_cursor=_click,
