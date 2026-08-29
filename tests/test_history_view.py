@@ -1,5 +1,5 @@
 from fileshuttle.db.repository import RunSummary
-from fileshuttle.ui.views.history_view import _run_action_summary
+from fileshuttle.ui.views.history_view import _run_action_summary, _run_moved_files
 
 
 def _run(**kwargs) -> RunSummary:
@@ -26,3 +26,13 @@ def test_empty_copy_run_shows_copied_not_moved():
 def test_deleted_mapping_falls_back_to_counts():
     run = _run(files_deleted=3)
     assert _run_action_summary(run, None) == "deleted 3"
+
+
+def test_run_moved_files_false_when_all_counts_zero():
+    assert not _run_moved_files(_run())
+
+
+def test_run_moved_files_true_when_any_action_count():
+    assert _run_moved_files(_run(files_moved=1))
+    assert _run_moved_files(_run(files_copied=1))
+    assert _run_moved_files(_run(files_deleted=1))

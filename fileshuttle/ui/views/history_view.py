@@ -19,6 +19,10 @@ _TRIGGER_LABELS = {
 _ACCOMPLISHED_LABELS = {"move": "moved", "copy": "copied", "delete": "deleted"}
 
 
+def _run_moved_files(run) -> bool:
+    return run.files_moved + run.files_copied + run.files_deleted > 0
+
+
 def _run_action_summary(run, action_type: str | None) -> str:
     if action_type in _ACCOMPLISHED_LABELS:
         label = _ACCOMPLISHED_LABELS[action_type]
@@ -43,6 +47,11 @@ def build(state) -> ft.Control:
         label="Mapping", width=280, value="all",
         options=[ft.DropdownOption(key="all", text="All mappings")]
         + [ft.DropdownOption(key=str(m.id), text=m.name) for m in mappings],
+    )
+
+    show_empty_runs = ft.Checkbox(
+        label="Show runs with no files moved",
+        value=False,
     )
 
     runs_column = ft.Column(controls=[], scroll=ft.ScrollMode.AUTO, expand=True)
@@ -125,10 +134,12 @@ def build(state) -> ft.Control:
             padding=10,
             content=ft.Row(
                 controls=[
-                    ft.Container(
-                        on_click=toggle,
+                    ft.GestureDetector(
                         expand=True,
-                        content=ft.Row(
+                        mouse_cursor=ft.MouseCursor.CLICK,
+                        on_tap=toggle,
+                        content=ft.Container(
+                            content=ft.Row(
                             controls=[
                                 chevron,
                                 ft.Column(
@@ -170,6 +181,7 @@ def build(state) -> ft.Control:
                                     ],
                                 ),
                             ],
+                            ),
                         ),
                     ),
                     action,
@@ -182,28 +194,41 @@ def build(state) -> ft.Control:
     def refresh(e=None):
         mapping_id = None if filter_dropdown.value in (None, "all") else int(filter_dropdown.value)
         runs = repo.list_runs(state.conn, mapping_id=mapping_id)
+        if not show_empty_runs.value:
+            runs = [run for run in runs if _run_moved_files(run)]
         if not runs:
+            empty_message = (
+                "No runs with moved files yet."
+                if not show_empty_runs.value
+                else "No runs yet."
+            )
             runs_column.controls = [ft.Container(
                 padding=30,
-                content=ft.Text("No runs yet.", color=ft.Colors.ON_SURFACE_VARIANT),
+                content=ft.Text(empty_message, color=ft.Colors.ON_SURFACE_VARIANT),
             )]
         else:
             runs_column.controls = [build_run_row(run) for run in runs]
         runs_column.update()
 
     filter_dropdown.on_select = refresh
+    show_empty_runs.on_change = refresh
+
     initial_runs = repo.list_runs(state.conn)
+    initial_runs = [run for run in initial_runs if _run_moved_files(run)]
     runs_column.controls = (
         [build_run_row(run) for run in initial_runs]
         if initial_runs
-        else [ft.Container(padding=30, content=ft.Text("No runs yet.", color=ft.Colors.ON_SURFACE_VARIANT))]
+        else [ft.Container(
+            padding=30,
+            content=ft.Text("No runs with moved files yet.", color=ft.Colors.ON_SURFACE_VARIANT),
+        )]
     )
 
     return ft.Column(
         expand=True,
         controls=[
             ft.Text("History", size=22, weight=ft.FontWeight.BOLD),
-            filter_dropdown,
+            ft.Row(controls=[filter_dropdown, show_empty_runs], wrap=True, spacing=16),
             runs_column,
         ],
     )
