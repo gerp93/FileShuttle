@@ -7,7 +7,7 @@
     "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
     "dev:renderer": "vite",
     "dev:electron": "wait-on http://localhost:5173 && tsc -p tsconfig.main.json && electron .",
-    "build": "npm run build:renderer && npm run build:electron",
+    "build": "npm run generate-icons && npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.main.json",
     "package": "electron-builder",
