@@ -51,6 +51,9 @@ def test_action_type_defaults_to_move_and_round_trips_delete(conn):
     move_id = _create_sample_mapping(conn)
     assert repo.get_mapping(conn, move_id).action_type == "move"
 
+    copy_id = _create_sample_mapping(conn, action_type="copy")
+    assert repo.get_mapping(conn, copy_id).action_type == "copy"
+
     delete_id = _create_sample_mapping(conn, action_type="delete", dest_path="")
     assert repo.get_mapping(conn, delete_id).action_type == "delete"
 
@@ -109,6 +112,7 @@ def test_record_run_and_list_and_detail(conn):
         finished_at=datetime(2026, 1, 1, 10, 0, 5),
         file_outcomes=[
             FileOutcome("C:/src/a.pdf", "C:/dst/a.pdf", "moved", None, 100),
+            FileOutcome("C:/src/c.pdf", "C:/dst/c.pdf", "copied", None, 75),
             FileOutcome("C:/src/b.pdf", None, "skipped", "conflict_skip", 50),
         ],
     )
@@ -121,11 +125,12 @@ def test_record_run_and_list_and_detail(conn):
     assert len(runs) == 1
     assert runs[0].id == run_id
     assert runs[0].files_moved == 1
+    assert runs[0].files_copied == 1
     assert runs[0].files_skipped == 1
 
     detail = repo.get_run_detail(conn, run_id)
-    assert len(detail) == 2
-    assert {d.outcome for d in detail} == {"moved", "skipped"}
+    assert len(detail) == 3
+    assert {d.outcome for d in detail} == {"moved", "copied", "skipped"}
 
     assert repo.get_run(conn, run_id).id == run_id
     assert repo.get_run(conn, 999) is None

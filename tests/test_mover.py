@@ -247,6 +247,52 @@ def test_delete_action_failure_records_error_and_continues(tmp_path, monkeypatch
     assert (source / "a.txt").exists()  # left in place since the delete failed
 
 
+def test_copy_action_duplicates_files_and_leaves_source_untouched(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a.txt").write_text("a")
+    (source / "b.txt").write_text("b")
+
+    mapping = _mapping(tmp_path, recursive=False, action_type="copy")
+    result = run_mapping(mapping)
+
+    assert result.files_copied == 2
+    assert result.files_moved == 0
+    assert (tmp_path / "dest" / "a.txt").read_text() == "a"
+    assert (tmp_path / "dest" / "b.txt").read_text() == "b"
+    assert (source / "a.txt").exists()  # source left in place, unlike move
+    assert (source / "b.txt").exists()
+
+    copied_outcome = result.file_outcomes[0]
+    assert copied_outcome.outcome == "copied"
+    assert copied_outcome.dest_path == str(tmp_path / "dest" / "a.txt")
+
+
+def test_copy_action_failure_records_error_and_continues(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a.txt").write_text("a")
+    (source / "b.txt").write_text("b")
+
+    import fileshuttle.engine.mover as mover_module
+
+    original_copy = mover_module.shutil.copy2
+
+    def flaky_copy(src, dst):
+        if str(src).endswith("a.txt"):
+            raise OSError("simulated failure")
+        return original_copy(src, dst)
+
+    monkeypatch.setattr(mover_module.shutil, "copy2", flaky_copy)
+
+    result = run_mapping(_mapping(tmp_path, recursive=False, action_type="copy"))
+
+    assert result.files_errored == 1
+    assert result.files_copied == 1
+    assert (source / "a.txt").exists()  # left in place since the copy failed
+    assert (tmp_path / "dest" / "b.txt").exists()
+
+
 def test_undo_run_skips_when_something_already_at_original_source(tmp_path):
     dst = tmp_path / "dst"
     src = tmp_path / "src"

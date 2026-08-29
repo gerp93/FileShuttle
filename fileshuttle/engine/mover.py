@@ -18,7 +18,7 @@ def run_mapping(mapping: MappingConfig) -> RunResult:
     started_at = datetime.now()
     source_root = Path(mapping.source_path)
     outcomes: list[FileOutcome] = []
-    dest_root = Path(mapping.dest_path) if mapping.action_type == "move" else None
+    dest_root = Path(mapping.dest_path) if mapping.action_type in ("move", "copy") else None
 
     for file_path in iter_candidate_files(source_root, mapping.recursive):
         try:
@@ -53,8 +53,12 @@ def run_mapping(mapping: MappingConfig) -> RunResult:
 
         try:
             dest_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(file_path), str(dest_path))
-            outcomes.append(FileOutcome(str(file_path), str(dest_path), "moved", reason, stat_info.st_size))
+            if mapping.action_type == "copy":
+                shutil.copy2(str(file_path), str(dest_path))
+                outcomes.append(FileOutcome(str(file_path), str(dest_path), "copied", reason, stat_info.st_size))
+            else:
+                shutil.move(str(file_path), str(dest_path))
+                outcomes.append(FileOutcome(str(file_path), str(dest_path), "moved", reason, stat_info.st_size))
         except Exception as exc:
             outcomes.append(FileOutcome(str(file_path), str(dest_path), "error", str(exc), stat_info.st_size))
 
