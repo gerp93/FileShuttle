@@ -193,23 +193,25 @@ def build(state, record: MappingRecord) -> ft.Card:
     run_button = ft.ElevatedButton("Run Now", icon=ft.Icons.PLAY_ARROW, on_click=run_now)
 
     # --- source -> destination flow, each path level as its own chip ---
+    recursive_icon = (
+        ft.Icon(ft.Icons.ACCOUNT_TREE, size=14, color=ft.Colors.ON_SURFACE_VARIANT,
+                tooltip="Includes subfolders")
+        if record.recursive else None
+    )
     if record.action_type == "delete":
-        dest_row: ft.Control = ft.Row(
-            spacing=6,
-            controls=[
-                ft.Icon(ft.Icons.DELETE_FOREVER, size=15, color=ft.Colors.ERROR),
-                ft.Text("Delete matching files (Recycle Bin)", size=12,
-                        weight=ft.FontWeight.BOLD, color=ft.Colors.ERROR),
-            ],
-        )
+        dest_controls: list[ft.Control] = [
+            ft.Icon(ft.Icons.DELETE_FOREVER, size=15, color=ft.Colors.ERROR),
+            ft.Text("Delete matching files (Recycle Bin)", size=12,
+                    weight=ft.FontWeight.BOLD, color=ft.Colors.ERROR),
+        ]
+        if recursive_icon is not None:
+            dest_controls.append(recursive_icon)
+        dest_row: ft.Control = ft.Row(spacing=6, controls=dest_controls)
     else:
         dest_row = _breadcrumb_row(ft.Icons.FOLDER, "Copy to" if record.action_type == "copy" else "To",
                                     record.dest_path)
-        if record.recursive:
-            dest_row.controls.append(
-                ft.Icon(ft.Icons.ACCOUNT_TREE, size=14, color=ft.Colors.ON_SURFACE_VARIANT,
-                        tooltip="Includes subfolders")
-            )
+        if recursive_icon is not None:
+            dest_row.controls.append(recursive_icon)
     path_section = ft.Column(
         spacing=4,
         controls=[

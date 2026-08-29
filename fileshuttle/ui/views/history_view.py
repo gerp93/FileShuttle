@@ -16,6 +16,25 @@ _TRIGGER_LABELS = {
     "undo": "undo",
 }
 
+_ACCOMPLISHED_LABELS = {"move": "moved", "copy": "copied", "delete": "deleted"}
+
+
+def _run_action_summary(run, action_type: str | None) -> str:
+    if action_type in _ACCOMPLISHED_LABELS:
+        label = _ACCOMPLISHED_LABELS[action_type]
+        if action_type == "copy":
+            count = run.files_copied
+        elif action_type == "delete":
+            count = run.files_deleted
+        else:
+            count = run.files_moved
+        return f"{label} {count}"
+    if run.files_deleted:
+        return f"deleted {run.files_deleted}"
+    if run.files_copied:
+        return f"copied {run.files_copied}"
+    return f"moved {run.files_moved}"
+
 
 def build(state) -> ft.Control:
     mappings = repo.list_mappings(state.conn)
@@ -139,12 +158,9 @@ def build(state) -> ft.Control:
                                                 ),
                                                 ft.Text(run.started_at, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
                                                 ft.Text(
-                                                    (
-                                                        f"deleted {run.files_deleted}"
-                                                        if run.files_deleted
-                                                        else f"copied {run.files_copied}"
-                                                        if run.files_copied
-                                                        else f"moved {run.files_moved}"
+                                                    _run_action_summary(
+                                                        run,
+                                                        mapping.action_type if mapping else None,
                                                     )
                                                     + f" / skipped {run.files_skipped} / errored {run.files_errored}",
                                                     size=12,
