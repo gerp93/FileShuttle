@@ -1,6 +1,6 @@
-<img src="assets/logo.png" alt="FileShuttle logo" width="160" />
-
 # FileShuttle
+
+<img src="assets/logo.png" alt="FileShuttle logo" width="160" />
 
 A desktop app that moves files between folders on a schedule, or on demand.
 Configure any number of source → destination mappings, each with its own
@@ -28,27 +28,32 @@ come from there rather than being reinvented locally.
 - **Run history** — per-run counts and per-file detail (moved/skipped/
   errored) for every mapping.
 - **Background/tray mode** — closing the window keeps FileShuttle running
-  in the system tray so schedules keep firing; optional "start at Windows
-  login" toggle in Settings.
+  in the system tray so schedules keep firing; optional start-at-login
+  toggle in Settings.
 - **Desktop notifications** when a scheduled run completes.
 - **Theming** — pick any [VisualAssault](https://github.com/gerp93/VisualAssault)
-  color theme; the in-app logo recolors itself to match.
+  color theme.
 
 ## Running from source
 
+```bash
+npm install
+npm run generate-icons   # first time, or after changing assets/logo.png
+npm run dev
 ```
-pip install -r requirements.txt
-python main.py
+
+## Building
+
+```bash
+npm run build
+npm run package
 ```
 
 ## Project layout
 
-- `fileshuttle/engine/` — the filesystem move/filter logic (pure Python,
-  no UI or database dependency).
-- `fileshuttle/db/` — SQLite schema and CRUD for mappings/filters/history.
-- `fileshuttle/services/` — glue between the database and the engine, plus
-  the Windows start-at-login toggle.
-- `fileshuttle/scheduler/` — the in-process APScheduler wrapper.
-- `fileshuttle/ui/` — the Flet desktop UI, theming, self-update, and tray.
+- `src/main/` — Electron main process: SQLite, file engine, scheduler, tray, IPC
+- `src/preload/` — (in `src/main/preload.ts`) typed bridge to the renderer
+- `src/renderer/` — React UI (Mappings, Editor, History, Settings)
+- `src/shared/types/` — shared TypeScript types for IPC
 
 See [TODO.md](TODO.md) for the current backlog.

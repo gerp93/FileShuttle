@@ -1,33 +1,10 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-.eggs/
-build/
+node_modules/
 dist/
-*.spec
-.venv/
-venv/
-env/
-
-# Flet build output
-storage/
-
-# App data
-data/
-*.db
-*.db-journal
-*.db-wal
-
-# Tooling
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-
-# Editors / OS
-.vscode/
-.idea/
+release/
+build/icon.png
+assets/icon.png
+src/renderer/assets/logo.png
+*.log
 .DS_Store
-Thumbs.db
+.env
+.env.local

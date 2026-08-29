@@ -11,9 +11,8 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
   process is running)
 - Per-mapping run progress indicator (live file count) during Run Now
 - Dry-run / preview mode — show which files would move without moving them
-- CI test workflow (`ci.yml`) running `tests/` on push/PR — not yet added
-  since no Python CI template exists in KVG_Standards yet and KVGenius
-  (the org's other Flet app) doesn't have one either
+- TypeScript unit tests for engine/db/services (ported from the old Python suite)
+- CI test workflow (`ci.yml`) running tests on push/PR
 
 ## Fixes
 
