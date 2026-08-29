@@ -135,10 +135,10 @@ def build(state) -> ft.Control:
             content=ft.Row(
                 controls=[
                     ft.GestureDetector(
+                        expand=True,
                         mouse_cursor=ft.MouseCursor.CLICK,
                         on_tap=toggle,
                         content=ft.Container(
-                            expand=True,
                             content=ft.Row(
                             controls=[
                                 chevron,
