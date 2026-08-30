@@ -1,8 +1,3 @@
-# Manual, explicit-version release — see gerp93/KVG_Standards'
-# templates/cut-release.yml for the full rationale. Coexists with
-# auto-release.yml (fires on every push); use this when you want a
-# deliberately-numbered version instead of the auto-bump.
-
 name: Cut Release
 
 on:
@@ -12,6 +7,10 @@ on:
         description: 'Version to release, e.g. "1.2.3" or "v1.2.3"'
         required: true
         type: string
+
+concurrency:
+  group: fileshuttle-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -53,11 +52,8 @@ jobs:
 
   release:
     needs: tag
-    uses: gerp93/KVG_Standards/.github/workflows/release-flet.yml@main
+    uses: gerp93/KVG_Standards/.github/workflows/release-electron.yml@main
     with:
       version: ${{ needs.tag.outputs.version }}
-      app_name: FileShuttle
-      entry_point: main.py
-      version_file: _version.py
     permissions:
       contents: write
