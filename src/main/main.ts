@@ -12,12 +12,14 @@ import {
   resetToDefaultDbPath,
 } from './dbLocation';
 import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
+import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
 import { SchedulerService } from './scheduler/scheduler';
 import {
   CreateJobInput,
   CreateMappingInput,
   HistoryListFilter,
+  LogRetentionId,
   RunAllSummary,
   RunResult,
   UpdateCheckResult,
@@ -31,6 +33,7 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let db: Database | null = null;
 let scheduler: SchedulerService | null = null;
+let retention: RetentionService | null = null;
 let announcedBackground = false;
 let isQuitting = false;
 
@@ -112,6 +115,7 @@ function createTray(): void {
         click: () => {
           isQuitting = true;
           scheduler?.shutdown();
+          retention?.shutdown();
           app.quit();
         },
       },
@@ -216,6 +220,8 @@ function registerIPCHandlers(): void {
     scheduler?.reloadJobs();
   });
 
+  ipcMain.handle('mappings:listJobsUsing', (_, id: number) => repo.listJobsUsingMapping(db!, id));
+
   ipcMain.handle('mappings:setEnabled', (_, id: number, enabled: boolean) => {
     repo.setMappingEnabled(db!, id, enabled);
     saveDatabase(db!);
@@ -276,6 +282,8 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('history:undo', async (_, runId: number) => executeUndo(db!, runId));
 
+  ipcMain.handle('history:purgeAll', () => applyRetention(db!, 'all'));
+
   ipcMain.handle('settings:getTheme', () => repo.getSetting(db!, 'theme', 'blue_oval'));
 
   ipcMain.handle('settings:setTheme', (_, themeId: string) => {
@@ -290,6 +298,13 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('settings:setStartup', (_, enabled: boolean) => {
     setStartupEnabled(enabled);
+  });
+
+  ipcMain.handle('settings:getLogRetention', () => getLogRetention(db!));
+
+  ipcMain.handle('settings:setLogRetention', (_, id: LogRetentionId) => {
+    setLogRetention(db!, id);
+    return applyRetention(db!, 'expired');
   });
 
   ipcMain.handle('dialogs:pickFolder', async (_, title: string) => {
@@ -355,6 +370,9 @@ app.whenReady().then(async () => {
   repo.migrateChainsToJobs(db);
   saveDatabase(db);
 
+  retention = new RetentionService(db);
+  retention.start();
+
   scheduler = new SchedulerService(db, (jobId, result) => {
     const job = repo.getJob(db!, jobId);
     const jobName = job?.name ?? `job #${jobId}`;
@@ -382,6 +400,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   isQuitting = true;
   scheduler?.shutdown();
+  retention?.shutdown();
   if (db) saveDatabase(db);
 });
 

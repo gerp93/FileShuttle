@@ -40,9 +40,9 @@ const STATEMENTS = [
   )`,
   `CREATE TABLE IF NOT EXISTS run_history (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-    mapping_id             INTEGER NOT NULL REFERENCES mappings(id) ON DELETE CASCADE,
+    mapping_id             INTEGER REFERENCES mappings(id) ON DELETE CASCADE,
     mapping_name_snapshot  TEXT NOT NULL,
-    trigger_type           TEXT NOT NULL CHECK (trigger_type IN ('manual','scheduled','undo')),
+    trigger_type           TEXT NOT NULL CHECK (trigger_type IN ('manual','scheduled','undo','system')),
     started_at             TEXT NOT NULL,
     finished_at            TEXT NOT NULL,
     files_moved            INTEGER NOT NULL DEFAULT 0,
@@ -50,7 +50,7 @@ const STATEMENTS = [
     files_deleted          INTEGER NOT NULL DEFAULT 0,
     files_skipped          INTEGER NOT NULL DEFAULT 0,
     files_errored          INTEGER NOT NULL DEFAULT 0,
-    status                 TEXT NOT NULL CHECK (status IN ('success','partial','error')),
+    status                 TEXT NOT NULL CHECK (status IN ('success','with_skips','partial','error')),
     error_message          TEXT,
     undone_by_run_id       INTEGER REFERENCES run_history(id) ON DELETE SET NULL,
     triggered_by_run_id    INTEGER REFERENCES run_history(id) ON DELETE SET NULL
@@ -117,6 +117,86 @@ function widenRunHistoryFilesOutcomeCheck(db: Database): void {
       'SELECT id, run_id, source_path, dest_path, outcome, reason, file_size_bytes FROM run_history_files_old'
   );
   db.run('DROP TABLE run_history_files_old');
+}
+
+function widenRunHistoryForSystemEvents(db: Database): void {
+  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_history'");
+  if (!rows.length || !rows[0].values.length) return;
+  const sql = String(rows[0].values[0][0] ?? '');
+  if (sql.includes("'system'")) return;
+
+  db.run('PRAGMA foreign_keys = OFF');
+  db.run(`CREATE TABLE run_history_new (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    mapping_id             INTEGER REFERENCES mappings(id) ON DELETE CASCADE,
+    mapping_name_snapshot  TEXT NOT NULL,
+    trigger_type           TEXT NOT NULL CHECK (trigger_type IN ('manual','scheduled','undo','system')),
+    started_at             TEXT NOT NULL,
+    finished_at            TEXT NOT NULL,
+    files_moved            INTEGER NOT NULL DEFAULT 0,
+    files_copied           INTEGER NOT NULL DEFAULT 0,
+    files_deleted          INTEGER NOT NULL DEFAULT 0,
+    files_skipped          INTEGER NOT NULL DEFAULT 0,
+    files_errored          INTEGER NOT NULL DEFAULT 0,
+    status                 TEXT NOT NULL CHECK (status IN ('success','with_skips','partial','error')),
+    error_message          TEXT,
+    undone_by_run_id       INTEGER REFERENCES run_history_new(id) ON DELETE SET NULL,
+    triggered_by_run_id    INTEGER REFERENCES run_history_new(id) ON DELETE SET NULL,
+    job_id                 INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    job_name_snapshot      TEXT
+  )`);
+  db.run(`INSERT INTO run_history_new
+    (id, mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
+     files_moved, files_copied, files_deleted, files_skipped, files_errored,
+     status, error_message, undone_by_run_id, triggered_by_run_id, job_id, job_name_snapshot)
+    SELECT
+      id, mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
+      files_moved, files_copied, files_deleted, files_skipped, files_errored,
+      status, error_message, undone_by_run_id, triggered_by_run_id, job_id, job_name_snapshot
+    FROM run_history`);
+  db.run('DROP TABLE run_history');
+  db.run('ALTER TABLE run_history_new RENAME TO run_history');
+  db.run('PRAGMA foreign_keys = ON');
+}
+
+function widenRunHistoryStatusCheck(db: Database): void {
+  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_history'");
+  if (!rows.length || !rows[0].values.length) return;
+  const sql = String(rows[0].values[0][0] ?? '');
+  if (sql.includes("'with_skips'")) return;
+
+  db.run('PRAGMA foreign_keys = OFF');
+  db.run(`CREATE TABLE run_history_new (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    mapping_id             INTEGER REFERENCES mappings(id) ON DELETE CASCADE,
+    mapping_name_snapshot  TEXT NOT NULL,
+    trigger_type           TEXT NOT NULL CHECK (trigger_type IN ('manual','scheduled','undo','system')),
+    started_at             TEXT NOT NULL,
+    finished_at            TEXT NOT NULL,
+    files_moved            INTEGER NOT NULL DEFAULT 0,
+    files_copied           INTEGER NOT NULL DEFAULT 0,
+    files_deleted          INTEGER NOT NULL DEFAULT 0,
+    files_skipped          INTEGER NOT NULL DEFAULT 0,
+    files_errored          INTEGER NOT NULL DEFAULT 0,
+    status                 TEXT NOT NULL CHECK (status IN ('success','with_skips','partial','error')),
+    error_message          TEXT,
+    undone_by_run_id       INTEGER REFERENCES run_history_new(id) ON DELETE SET NULL,
+    triggered_by_run_id    INTEGER REFERENCES run_history_new(id) ON DELETE SET NULL,
+    job_id                 INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    job_name_snapshot      TEXT
+  )`);
+  db.run(`INSERT INTO run_history_new
+    (id, mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
+     files_moved, files_copied, files_deleted, files_skipped, files_errored,
+     status, error_message, undone_by_run_id, triggered_by_run_id, job_id, job_name_snapshot)
+    SELECT
+      id, mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
+      files_moved, files_copied, files_deleted, files_skipped, files_errored,
+      status, error_message, undone_by_run_id, triggered_by_run_id, job_id, job_name_snapshot
+    FROM run_history`);
+  db.run('DROP TABLE run_history');
+  db.run('ALTER TABLE run_history_new RENAME TO run_history');
+  db.run('PRAGMA foreign_keys = ON');
 }
 
 function widenMappingsActionTypeCheck(db: Database): void {
@@ -192,6 +272,8 @@ function initSchema(db: Database): void {
     'job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL'
   );
   addColumnIfMissing(db, 'run_history', 'job_name_snapshot', 'job_name_snapshot TEXT');
+  widenRunHistoryForSystemEvents(db);
+  widenRunHistoryStatusCheck(db);
 }
 
 export async function initDatabase(dbPath?: string): Promise<Database> {

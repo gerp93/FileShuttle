@@ -7,6 +7,7 @@ import {
   HistoryListFilter,
   JobRecord,
   MappingConfig,
+  mappingInUseMessage,
   MappingRecord,
   RunResult,
   RunStats,
@@ -140,7 +141,25 @@ export function updateMapping(db: Database, mappingId: number, input: UpdateMapp
   replaceFilterRules(db, mappingId, input.filters);
 }
 
+export function listJobsUsingMapping(db: Database, mappingId: number): { id: number; name: string }[] {
+  return queryAll(
+    db,
+    `SELECT DISTINCT j.id, j.name
+     FROM jobs j
+     JOIN job_steps s ON s.job_id = j.id
+     WHERE s.mapping_id = ?
+     ORDER BY j.name COLLATE NOCASE`,
+    [mappingId]
+  ).map((row) => ({ id: Number(row.id), name: String(row.name) }));
+}
+
 export function deleteMapping(db: Database, mappingId: number): void {
+  const jobs = listJobsUsingMapping(db, mappingId);
+  if (jobs.length) {
+    const mapping = getMapping(db, mappingId);
+    const name = mapping?.name ?? `Mapping #${mappingId}`;
+    throw new Error(mappingInUseMessage(name, jobs.map((job) => job.name)));
+  }
   run(db, 'DELETE FROM mappings WHERE id = ?', [mappingId]);
 }
 
@@ -167,7 +186,7 @@ export function listMappings(db: Database, enabledOnly = false): MappingRecord[]
 function rowToRunSummary(row: Record<string, unknown>): RunSummary {
   return {
     id: Number(row.id),
-    mappingId: Number(row.mapping_id),
+    mappingId: toInt(row.mapping_id),
     mappingNameSnapshot: String(row.mapping_name_snapshot),
     jobId: toInt(row.job_id),
     jobNameSnapshot: row.job_name_snapshot ? String(row.job_name_snapshot) : null,
@@ -212,7 +231,7 @@ export function buildRunResult(startedAt: Date, finishedAt: Date, fileOutcomes: 
 export function recordRun(
   db: Database,
   params: {
-    mappingId: number;
+    mappingId: number | null;
     mappingNameSnapshot: string;
     triggerType: RunSummary['triggerType'];
     result: RunResult;
@@ -310,6 +329,26 @@ export function getRunDetail(db: Database, runId: number): FileOutcome[] {
     reason: row.reason ? String(row.reason) : null,
     sizeBytes: toInt(row.file_size_bytes),
   }));
+}
+
+export function countRuns(db: Database): number {
+  const row = queryOne(db, 'SELECT COUNT(*) AS c FROM run_history');
+  return Number(row?.c ?? 0);
+}
+
+export function deleteRunsOlderThan(db: Database, cutoffIso: string): number {
+  const row = queryOne(db, 'SELECT COUNT(*) AS c FROM run_history WHERE started_at < ?', [cutoffIso]);
+  const count = Number(row?.c ?? 0);
+  if (count === 0) return 0;
+  run(db, 'DELETE FROM run_history WHERE started_at < ?', [cutoffIso]);
+  return count;
+}
+
+export function deleteAllRuns(db: Database): number {
+  const count = countRuns(db);
+  if (count === 0) return 0;
+  run(db, 'DELETE FROM run_history');
+  return count;
 }
 
 export function getSetting(db: Database, key: string, defaultValue: string | null = null): string | null {

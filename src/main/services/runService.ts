@@ -1,5 +1,5 @@
 import { Database } from 'sql.js';
-import { JobRecord, RunResult } from '../../shared/types';
+import { computeRunStatus, JobRecord, RunResult } from '../../shared/types';
 import * as repo from '../database/repository';
 import { saveDatabase } from '../database/schema';
 import { runMapping, undoRun } from '../engine/mover';
@@ -33,7 +33,7 @@ async function runJobSteps(
   for (const mapping of job.steps) {
     if (!mapping.enabled) continue;
     const result = await runMapping(repo.toMappingConfig(mapping));
-    const status = computeStatus(result);
+    const status = computeRunStatus(result);
     const runId = repo.recordRun(db, {
       mappingId: mapping.id,
       mappingNameSnapshot: mapping.name,
@@ -85,7 +85,7 @@ export function executeUndo(db: Database, runId: number): RunResult {
 
   const fileOutcomes = repo.getRunDetail(db, runId);
   const result = undoRun(fileOutcomes);
-  const status = computeStatus(result);
+  const status = computeRunStatus(result);
 
   const undoRunId = repo.recordRun(db, {
     mappingId: originalRun.mappingId,
@@ -101,7 +101,8 @@ export function executeUndo(db: Database, runId: number): RunResult {
   return result;
 }
 
-function baseMappingName(db: Database, run: { mappingId: number; mappingNameSnapshot: string }): string {
+function baseMappingName(db: Database, run: { mappingId: number | null; mappingNameSnapshot: string }): string {
+  if (run.mappingId == null) return run.mappingNameSnapshot;
   const record = repo.getMapping(db, run.mappingId);
   if (record) return record.name;
   const snapshot = run.mappingNameSnapshot;
@@ -122,9 +123,3 @@ export async function executeAllEnabledJobs(
   return results;
 }
 
-function computeStatus(result: RunResult): 'success' | 'partial' | 'error' {
-  const accomplished = result.filesMoved + result.filesCopied + result.filesDeleted;
-  if (result.filesErrored && !accomplished) return 'error';
-  if ((result.filesErrored || result.filesSkipped) && accomplished) return 'partial';
-  return 'success';
-}

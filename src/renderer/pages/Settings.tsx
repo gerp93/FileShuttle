@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { DEFAULT_LOG_RETENTION, LOG_RETENTION_PRESETS, LogRetentionId } from '../../shared/types';
 import { useTheme } from '../context/ThemeContext';
 import { FletThemeId, getThemeList } from '../utils/themes';
 
@@ -8,8 +9,12 @@ export default function Settings() {
   const [isDefaultDb, setIsDefaultDb] = useState(true);
   const [startupSupported, setStartupSupported] = useState(false);
   const [startupEnabled, setStartupEnabled] = useState(false);
+  const [logRetention, setLogRetention] = useState<LogRetentionId>(DEFAULT_LOG_RETENTION);
   const [updateStatus, setUpdateStatus] = useState('');
   const [confirmRelocate, setConfirmRelocate] = useState<{ message: string; action: () => Promise<void> } | null>(null);
+  const [confirmPurge, setConfirmPurge] = useState(false);
+  const [purging, setPurging] = useState(false);
+  const [snackbar, setSnackbar] = useState('');
   const [version, setVersion] = useState('');
 
   useEffect(() => {
@@ -22,7 +27,36 @@ export default function Settings() {
       setStartupEnabled(s.enabled);
     });
     void window.fileshuttleAPI.app.getVersion().then(setVersion);
+    const getLogRetention = window.fileshuttleAPI.settings.getLogRetention;
+    if (typeof getLogRetention === 'function') {
+      void getLogRetention().then(setLogRetention);
+    }
   }, []);
+
+  const changeLogRetention = async (id: LogRetentionId) => {
+    setLogRetention(id);
+    const result = await window.fileshuttleAPI.settings.setLogRetention(id);
+    if (result.deletedRuns > 0) {
+      const noun = result.deletedRuns === 1 ? 'run log' : 'run logs';
+      setSnackbar(`Removed ${result.deletedRuns} ${noun} outside the new window.`);
+    }
+  };
+
+  const purgeAllLogs = async () => {
+    setConfirmPurge(false);
+    setPurging(true);
+    try {
+      const result = await window.fileshuttleAPI.history.purgeAll();
+      if (result.deletedRuns === 0) {
+        setSnackbar('No run logs to purge.');
+      } else {
+        const noun = result.deletedRuns === 1 ? 'run log' : 'run logs';
+        setSnackbar(`Purged ${result.deletedRuns} ${noun}.`);
+      }
+    } finally {
+      setPurging(false);
+    }
+  };
 
   const confirmAndRelocate = (message: string, action: () => Promise<void>) => {
     setConfirmRelocate({ message, action });
@@ -103,6 +137,29 @@ export default function Settings() {
 
       <hr className="divider" />
 
+      <h2 style={{ fontSize: 16 }}>History Retention</h2>
+      <label className="field" style={{ marginBottom: 8 }}>
+        Keep run logs for
+        <select
+          value={logRetention}
+          onChange={(e) => void changeLogRetention(e.target.value as LogRetentionId)}
+        >
+          {LOG_RETENTION_PRESETS.map((preset) => (
+            <option key={preset.id} value={preset.id}>{preset.label}</option>
+          ))}
+        </select>
+      </label>
+      <p className="muted">
+        Old run logs are removed when FileShuttle starts and once a day at midnight
+        while it is running. A history entry is written each time logs are purged.
+        Choose &quot;Never delete&quot; to keep everything.
+      </p>
+      <button className="outline danger" disabled={purging} onClick={() => setConfirmPurge(true)}>
+        Purge All Logs Now
+      </button>
+
+      <hr className="divider" />
+
       <h2 style={{ fontSize: 16 }}>Database Location</h2>
       <p className="muted" style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{dbPath}</p>
       {isDefaultDb && <p className="muted">Using default location.</p>}
@@ -119,6 +176,22 @@ export default function Settings() {
       <button className="outline" onClick={() => void checkUpdate()}>Check for Updates</button>
       {updateStatus && <p className="muted">{updateStatus}</p>}
 
+      {confirmPurge && (
+        <div className="dialog-overlay">
+          <div className="dialog">
+            <h3>Purge all run logs?</h3>
+            <p>
+              This permanently deletes every job and mapping run from History.
+              A single log entry will be kept recording that the purge happened.
+            </p>
+            <div className="dialog-actions">
+              <button className="outline" onClick={() => setConfirmPurge(false)}>Cancel</button>
+              <button className="primary" onClick={() => void purgeAllLogs()}>Purge All</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {confirmRelocate && (
         <div className="dialog-overlay">
           <div className="dialog">
@@ -130,6 +203,10 @@ export default function Settings() {
             </div>
           </div>
         </div>
+      )}
+
+      {snackbar && (
+        <div className="snackbar" onClick={() => setSnackbar('')}>{snackbar}</div>
       )}
     </div>
   );

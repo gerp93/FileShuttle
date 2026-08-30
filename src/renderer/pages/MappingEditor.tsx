@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CreateMappingInput, FilterRule } from '../../shared/types';
+import { CreateMappingInput, FilterRule, mappingInUseMessage } from '../../shared/types';
 import FilterRow from '../components/FilterRow';
 
 const ACTION_TYPES = [
@@ -33,6 +33,8 @@ export default function MappingEditor() {
   const [keepNewestEnabled, setKeepNewestEnabled] = useState(false);
   const [keepNewestCount, setKeepNewestCount] = useState('3');
   const [error, setError] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [blockedJobs, setBlockedJobs] = useState<string[] | null>(null);
 
   useEffect(() => {
     if (mappingId) {
@@ -104,6 +106,27 @@ export default function MappingEditor() {
       await window.fileshuttleAPI.mappings.update(mappingId!, input);
     }
     navigate('/mappings');
+  };
+
+  const requestDelete = async () => {
+    if (!mappingId) return;
+    const jobs = await window.fileshuttleAPI.mappings.listJobsUsing(mappingId);
+    if (jobs.length) {
+      setBlockedJobs(jobs.map((job) => job.name));
+      return;
+    }
+    setConfirmDelete(true);
+  };
+
+  const doDelete = async () => {
+    if (!mappingId) return;
+    try {
+      await window.fileshuttleAPI.mappings.delete(mappingId);
+      navigate('/mappings');
+    } catch (err) {
+      setConfirmDelete(false);
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const browseSource = async () => {
@@ -243,7 +266,37 @@ export default function MappingEditor() {
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="primary" onClick={() => void save()}>Save</button>
         <button className="outline" onClick={() => navigate('/mappings')}>Cancel</button>
+        {!isNew && (
+          <button className="outline danger" onClick={() => void requestDelete()}>Delete</button>
+        )}
       </div>
+
+      {confirmDelete && (
+        <div className="dialog-overlay">
+          <div className="dialog">
+            <h3>Delete mapping?</h3>
+            <p>
+              &quot;{name || 'This mapping'}&quot; and its run history will be permanently deleted.
+            </p>
+            <div className="dialog-actions">
+              <button className="outline" onClick={() => setConfirmDelete(false)}>Cancel</button>
+              <button className="primary" onClick={() => void doDelete()}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {blockedJobs && (
+        <div className="dialog-overlay">
+          <div className="dialog">
+            <h3>Can&apos;t delete this mapping</h3>
+            <p>{mappingInUseMessage(name || 'This mapping', blockedJobs)}</p>
+            <div className="dialog-actions">
+              <button className="primary" onClick={() => setBlockedJobs(null)}>OK</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

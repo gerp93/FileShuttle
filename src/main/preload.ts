@@ -6,7 +6,10 @@ import {
   FileOutcome,
   HistoryListFilter,
   JobRecord,
+  JobRef,
+  LogRetentionId,
   MappingRecord,
+  PurgeResult,
   RunAllSummary,
   RunResult,
   RunStats,
@@ -25,6 +28,7 @@ export interface FileShuttleAPI {
     delete: (id: number) => Promise<void>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
+    listJobsUsing: (id: number) => Promise<JobRef[]>;
   };
   jobs: {
     list: () => Promise<JobRecord[]>;
@@ -41,12 +45,15 @@ export interface FileShuttleAPI {
     list: (filter?: HistoryListFilter | number | null) => Promise<RunSummary[]>;
     getDetail: (runId: number) => Promise<FileOutcome[]>;
     undo: (runId: number) => Promise<RunResult>;
+    purgeAll: () => Promise<PurgeResult>;
   };
   settings: {
     getTheme: () => Promise<string | null>;
     setTheme: (themeId: string) => Promise<void>;
     getStartup: () => Promise<{ supported: boolean; enabled: boolean }>;
     setStartup: (enabled: boolean) => Promise<void>;
+    getLogRetention: () => Promise<LogRetentionId>;
+    setLogRetention: (id: LogRetentionId) => Promise<PurgeResult>;
   };
   dialogs: {
     pickFolder: (title: string) => Promise<string | null>;
@@ -78,6 +85,7 @@ const api: FileShuttleAPI = {
     delete: (id) => ipcRenderer.invoke('mappings:delete', id),
     setEnabled: (id, enabled) => ipcRenderer.invoke('mappings:setEnabled', id, enabled),
     getStats: (id) => ipcRenderer.invoke('mappings:getStats', id),
+    listJobsUsing: (id) => ipcRenderer.invoke('mappings:listJobsUsing', id),
   },
   jobs: {
     list: () => ipcRenderer.invoke('jobs:list'),
@@ -94,12 +102,15 @@ const api: FileShuttleAPI = {
     list: (filter) => ipcRenderer.invoke('history:list', filter),
     getDetail: (runId) => ipcRenderer.invoke('history:getDetail', runId),
     undo: (runId) => ipcRenderer.invoke('history:undo', runId),
+    purgeAll: () => ipcRenderer.invoke('history:purgeAll'),
   },
   settings: {
     getTheme: () => ipcRenderer.invoke('settings:getTheme'),
     setTheme: (themeId) => ipcRenderer.invoke('settings:setTheme', themeId),
     getStartup: () => ipcRenderer.invoke('settings:getStartup'),
     setStartup: (enabled) => ipcRenderer.invoke('settings:setStartup', enabled),
+    getLogRetention: () => ipcRenderer.invoke('settings:getLogRetention'),
+    setLogRetention: (id) => ipcRenderer.invoke('settings:setLogRetention', id),
   },
   dialogs: {
     pickFolder: (title) => ipcRenderer.invoke('dialogs:pickFolder', title),

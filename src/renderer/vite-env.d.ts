@@ -7,7 +7,10 @@ import type {
   FileOutcome,
   HistoryListFilter,
   JobRecord,
+  JobRef,
+  LogRetentionId,
   MappingRecord,
+  PurgeResult,
   RunAllSummary,
   RunResult,
   RunStats,
@@ -26,6 +29,7 @@ interface FileShuttleAPI {
     delete: (id: number) => Promise<void>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
+    listJobsUsing: (id: number) => Promise<JobRef[]>;
   };
   jobs: {
     list: () => Promise<JobRecord[]>;
@@ -42,12 +46,15 @@ interface FileShuttleAPI {
     list: (filter?: HistoryListFilter | number | null) => Promise<RunSummary[]>;
     getDetail: (runId: number) => Promise<FileOutcome[]>;
     undo: (runId: number) => Promise<RunResult>;
+    purgeAll: () => Promise<PurgeResult>;
   };
   settings: {
     getTheme: () => Promise<string | null>;
     setTheme: (themeId: string) => Promise<void>;
     getStartup: () => Promise<{ supported: boolean; enabled: boolean }>;
     setStartup: (enabled: boolean) => Promise<void>;
+    getLogRetention: () => Promise<LogRetentionId>;
+    setLogRetention: (id: LogRetentionId) => Promise<PurgeResult>;
   };
   dialogs: {
     pickFolder: (title: string) => Promise<string | null>;

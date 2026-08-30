@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MappingRecord, RunStats } from '../../shared/types';
+import { mappingInUseMessage, MappingRecord, RunStats } from '../../shared/types';
 
 const CONFLICT_LABELS: Record<string, string> = {
   skip: 'Skip duplicates',
@@ -36,6 +36,8 @@ export default function MappingCard({ record, onChanged }: Props) {
   const navigate = useNavigate();
   const [stats, setStats] = useState<RunStats | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [blockedJobs, setBlockedJobs] = useState<string[] | null>(null);
+  const [deleteError, setDeleteError] = useState('');
 
   useEffect(() => {
     void window.fileshuttleAPI.mappings.getStats(record.id).then(setStats);
@@ -56,10 +58,25 @@ export default function MappingCard({ record, onChanged }: Props) {
     onChanged();
   };
 
+  const requestDelete = async () => {
+    setDeleteError('');
+    const jobs = await window.fileshuttleAPI.mappings.listJobsUsing(record.id);
+    if (jobs.length) {
+      setBlockedJobs(jobs.map((job) => job.name));
+      return;
+    }
+    setConfirmDelete(true);
+  };
+
   const doDelete = async () => {
-    await window.fileshuttleAPI.mappings.delete(record.id);
-    setConfirmDelete(false);
-    onChanged();
+    try {
+      await window.fileshuttleAPI.mappings.delete(record.id);
+      setConfirmDelete(false);
+      onChanged();
+    } catch (err) {
+      setConfirmDelete(false);
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const pathParts = (p: string) => p.replace(/\\/g, '/').split('/').filter(Boolean);
@@ -104,7 +121,7 @@ export default function MappingCard({ record, onChanged }: Props) {
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
         <button className="text" onClick={() => navigate(`/editor/${record.id}`)}>Edit</button>
-        <button className="text danger" onClick={() => setConfirmDelete(true)}>Delete</button>
+        <button className="text danger" onClick={() => void requestDelete()}>Delete</button>
       </div>
 
       {confirmDelete && (
@@ -112,12 +129,35 @@ export default function MappingCard({ record, onChanged }: Props) {
           <div className="dialog">
             <h3>Delete mapping?</h3>
             <p>
-              &quot;{record.name}&quot; and its run history will be permanently deleted. Jobs that use this mapping
-              will drop this step.
+              &quot;{record.name}&quot; and its run history will be permanently deleted.
             </p>
             <div className="dialog-actions">
               <button className="outline" onClick={() => setConfirmDelete(false)}>Cancel</button>
               <button className="primary" onClick={() => void doDelete()}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {blockedJobs && (
+        <div className="dialog-overlay">
+          <div className="dialog">
+            <h3>Can&apos;t delete this mapping</h3>
+            <p>{mappingInUseMessage(record.name, blockedJobs)}</p>
+            <div className="dialog-actions">
+              <button className="primary" onClick={() => setBlockedJobs(null)}>OK</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteError && (
+        <div className="dialog-overlay">
+          <div className="dialog">
+            <h3>Can&apos;t delete this mapping</h3>
+            <p>{deleteError}</p>
+            <div className="dialog-actions">
+              <button className="primary" onClick={() => setDeleteError('')}>OK</button>
             </div>
           </div>
         </div>
