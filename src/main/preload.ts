@@ -1,14 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import {
+  CreateJobInput,
   CreateMappingInput,
   DbLocationInfo,
   FileOutcome,
+  HistoryListFilter,
+  JobRecord,
   MappingRecord,
   RunAllSummary,
   RunResult,
   RunStats,
   RunSummary,
   UpdateCheckResult,
+  UpdateJobInput,
   UpdateMappingInput,
 } from '../shared/types';
 
@@ -21,11 +25,20 @@ export interface FileShuttleAPI {
     delete: (id: number) => Promise<void>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
+  };
+  jobs: {
+    list: () => Promise<JobRecord[]>;
+    get: (id: number) => Promise<JobRecord | null>;
+    create: (input: CreateJobInput) => Promise<number>;
+    update: (id: number, input: UpdateJobInput) => Promise<void>;
+    delete: (id: number) => Promise<void>;
+    setEnabled: (id: number, enabled: boolean) => Promise<void>;
+    getStats: (id: number) => Promise<RunStats>;
     run: (id: number) => Promise<RunResult>;
     runAll: () => Promise<RunAllSummary>;
   };
   history: {
-    list: (mappingId?: number | null) => Promise<RunSummary[]>;
+    list: (filter?: HistoryListFilter | number | null) => Promise<RunSummary[]>;
     getDetail: (runId: number) => Promise<FileOutcome[]>;
     undo: (runId: number) => Promise<RunResult>;
   };
@@ -65,11 +78,20 @@ const api: FileShuttleAPI = {
     delete: (id) => ipcRenderer.invoke('mappings:delete', id),
     setEnabled: (id, enabled) => ipcRenderer.invoke('mappings:setEnabled', id, enabled),
     getStats: (id) => ipcRenderer.invoke('mappings:getStats', id),
-    run: (id) => ipcRenderer.invoke('mappings:run', id),
-    runAll: () => ipcRenderer.invoke('mappings:runAll'),
+  },
+  jobs: {
+    list: () => ipcRenderer.invoke('jobs:list'),
+    get: (id) => ipcRenderer.invoke('jobs:get', id),
+    create: (input) => ipcRenderer.invoke('jobs:create', input),
+    update: (id, input) => ipcRenderer.invoke('jobs:update', id, input),
+    delete: (id) => ipcRenderer.invoke('jobs:delete', id),
+    setEnabled: (id, enabled) => ipcRenderer.invoke('jobs:setEnabled', id, enabled),
+    getStats: (id) => ipcRenderer.invoke('jobs:getStats', id),
+    run: (id) => ipcRenderer.invoke('jobs:run', id),
+    runAll: () => ipcRenderer.invoke('jobs:runAll'),
   },
   history: {
-    list: (mappingId) => ipcRenderer.invoke('history:list', mappingId),
+    list: (filter) => ipcRenderer.invoke('history:list', filter),
     getDetail: (runId) => ipcRenderer.invoke('history:getDetail', runId),
     undo: (runId) => ipcRenderer.invoke('history:undo', runId),
   },

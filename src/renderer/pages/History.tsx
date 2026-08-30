@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FileOutcome, MappingRecord, RunSummary } from '../../shared/types';
+import { FileOutcome, JobRecord, MappingRecord, RunSummary } from '../../shared/types';
 
 const STATUS_CLASS: Record<string, string> = {
   success: 'status-success',
@@ -9,6 +9,12 @@ const STATUS_CLASS: Record<string, string> = {
 
 function runMovedFiles(run: RunSummary): boolean {
   return run.filesMoved + run.filesCopied + run.filesDeleted > 0;
+}
+
+function reasonLabel(reason: string | null): string | null {
+  if (!reason) return null;
+  if (reason === 'kept_newest') return 'kept (newest)';
+  return reason;
 }
 
 function actionSummary(run: RunSummary, actionType: string | null): string {
@@ -22,6 +28,8 @@ function actionSummary(run: RunSummary, actionType: string | null): string {
 
 export default function History() {
   const [mappings, setMappings] = useState<MappingRecord[]>([]);
+  const [jobs, setJobs] = useState<JobRecord[]>([]);
+  const [filterKind, setFilterKind] = useState<'all' | 'job' | 'mapping'>('all');
   const [filterId, setFilterId] = useState<string>('all');
   const [showEmpty, setShowEmpty] = useState(false);
   const [runs, setRuns] = useState<RunSummary[]>([]);
@@ -31,19 +39,26 @@ export default function History() {
   const [snackbar, setSnackbar] = useState('');
 
   const load = async () => {
-    const mappingId = filterId === 'all' ? null : parseInt(filterId, 10);
-    let list = await window.fileshuttleAPI.history.list(mappingId);
+    let list: RunSummary[];
+    if (filterKind === 'job' && filterId !== 'all') {
+      list = await window.fileshuttleAPI.history.list({ jobId: parseInt(filterId, 10) });
+    } else if (filterKind === 'mapping' && filterId !== 'all') {
+      list = await window.fileshuttleAPI.history.list({ mappingId: parseInt(filterId, 10) });
+    } else {
+      list = await window.fileshuttleAPI.history.list();
+    }
     if (!showEmpty) list = list.filter(runMovedFiles);
     setRuns(list);
   };
 
   useEffect(() => {
     void window.fileshuttleAPI.mappings.list().then(setMappings);
+    void window.fileshuttleAPI.jobs.list().then(setJobs);
   }, []);
 
   useEffect(() => {
     void load();
-  }, [filterId, showEmpty]);
+  }, [filterKind, filterId, showEmpty]);
 
   const toggleRun = async (run: RunSummary) => {
     const next = new Set(openRuns);
@@ -72,14 +87,41 @@ export default function History() {
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
         <label className="field">
-          Mapping
-          <select value={filterId} onChange={(e) => setFilterId(e.target.value)}>
-            <option value="all">All mappings</option>
-            {mappings.map((m) => (
-              <option key={m.id} value={m.id}>{m.name}</option>
-            ))}
+          Filter by
+          <select
+            value={filterKind}
+            onChange={(e) => {
+              setFilterKind(e.target.value as 'all' | 'job' | 'mapping');
+              setFilterId('all');
+            }}
+          >
+            <option value="all">All runs</option>
+            <option value="job">Job</option>
+            <option value="mapping">Mapping</option>
           </select>
         </label>
+        {filterKind === 'job' && (
+          <label className="field">
+            Job
+            <select value={filterId} onChange={(e) => setFilterId(e.target.value)}>
+              <option value="all">All jobs</option>
+              {jobs.map((j) => (
+                <option key={j.id} value={j.id}>{j.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        {filterKind === 'mapping' && (
+          <label className="field">
+            Mapping
+            <select value={filterId} onChange={(e) => setFilterId(e.target.value)}>
+              <option value="all">All mappings</option>
+              {mappings.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="switch-row">
           <input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} />
           Show runs with no files moved
@@ -104,9 +146,12 @@ export default function History() {
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                     <span className={`badge ${STATUS_CLASS[run.status] ?? ''}`}>{run.status.toUpperCase()}</span>
                     <strong>{run.mappingNameSnapshot}</strong>
+                    {run.jobNameSnapshot && (
+                      <span className="muted">in {run.jobNameSnapshot}</span>
+                    )}
                   </div>
                   <div className="muted">
-                    ({run.triggerType}{run.triggeredByRunId ? ', chained' : ''}) · {run.startedAt} ·{' '}
+                    ({run.triggerType}{run.triggeredByRunId ? ', job step' : ''}{run.jobNameSnapshot && !run.triggeredByRunId ? ', job' : ''}) · {run.startedAt} ·{' '}
                     {actionSummary(run, mapping?.actionType ?? null)} / skipped {run.filesSkipped} / errored {run.filesErrored}
                   </div>
                   {isOpen && (
@@ -118,7 +163,7 @@ export default function History() {
                           <div key={i} className="run-detail">
                             {d.outcome.toUpperCase().padEnd(8)} {d.sourcePath}
                             {d.destPath ? `  →  ${d.destPath}` : ''}
-                            {d.reason ? `  (${d.reason})` : ''}
+                            {reasonLabel(d.reason) ? `  (${reasonLabel(d.reason)})` : ''}
                           </div>
                         ))
                       )}

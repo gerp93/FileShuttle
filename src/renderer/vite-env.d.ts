@@ -1,15 +1,19 @@
 /// <reference types="vite/client" />
 
 import type {
+  CreateJobInput,
   CreateMappingInput,
   DbLocationInfo,
   FileOutcome,
+  HistoryListFilter,
+  JobRecord,
   MappingRecord,
   RunAllSummary,
   RunResult,
   RunStats,
   RunSummary,
   UpdateCheckResult,
+  UpdateJobInput,
   UpdateMappingInput,
 } from '../shared/types';
 
@@ -22,11 +26,20 @@ interface FileShuttleAPI {
     delete: (id: number) => Promise<void>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
+  };
+  jobs: {
+    list: () => Promise<JobRecord[]>;
+    get: (id: number) => Promise<JobRecord | null>;
+    create: (input: CreateJobInput) => Promise<number>;
+    update: (id: number, input: UpdateJobInput) => Promise<void>;
+    delete: (id: number) => Promise<void>;
+    setEnabled: (id: number, enabled: boolean) => Promise<void>;
+    getStats: (id: number) => Promise<RunStats>;
     run: (id: number) => Promise<RunResult>;
     runAll: () => Promise<RunAllSummary>;
   };
   history: {
-    list: (mappingId?: number | null) => Promise<RunSummary[]>;
+    list: (filter?: HistoryListFilter | number | null) => Promise<RunSummary[]>;
     getDetail: (runId: number) => Promise<FileOutcome[]>;
     undo: (runId: number) => Promise<RunResult>;
   };

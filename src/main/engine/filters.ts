@@ -1,5 +1,28 @@
 import { FilterRule } from '../../shared/types';
 
+export interface RankedFile {
+  filePath: string;
+  mtimeMs: number;
+}
+
+/** Leave the newest `keepNewest` files in place (by mtime, then path). */
+export function partitionKeepNewest<T extends RankedFile>(
+  files: T[],
+  keepNewest: number | null
+): { kept: T[]; rest: T[] } {
+  if (keepNewest == null || keepNewest <= 0) {
+    return { kept: [], rest: files };
+  }
+  const sorted = [...files].sort((a, b) => {
+    if (b.mtimeMs !== a.mtimeMs) return b.mtimeMs - a.mtimeMs;
+    return a.filePath.localeCompare(b.filePath);
+  });
+  return {
+    kept: sorted.slice(0, keepNewest),
+    rest: sorted.slice(keepNewest),
+  };
+}
+
 export function evaluateFilters(
   filePath: string,
   stat: { size: number; mtimeMs: number; birthtimeMs: number },

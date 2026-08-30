@@ -11,14 +11,17 @@ import {
   setDbPath,
   resetToDefaultDbPath,
 } from './dbLocation';
-import { executeAllEnabled, executeMapping, executeUndo } from './services/runService';
+import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
 import { SchedulerService } from './scheduler/scheduler';
 import {
+  CreateJobInput,
   CreateMappingInput,
+  HistoryListFilter,
   RunAllSummary,
   RunResult,
   UpdateCheckResult,
+  UpdateJobInput,
   UpdateMappingInput,
 } from '../shared/types';
 
@@ -69,7 +72,7 @@ function createWindow(startHidden = false): void {
       if (!announcedBackground) {
         showTrayNotification(
           'FileShuttle is still running',
-          'Scheduled mappings keep firing in the background. Use the tray icon to reopen or quit.'
+          'Scheduled jobs keep firing in the background. Use the tray icon to reopen or quit.'
         );
         announcedBackground = true;
       }
@@ -221,21 +224,53 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('mappings:getStats', (_, id: number) => repo.getRunStats(db!, id));
 
-  ipcMain.handle('mappings:run', async (_, id: number): Promise<RunResult> => {
-    return executeMapping(db!, id, 'manual');
+  ipcMain.handle('jobs:list', () => repo.listJobs(db!));
+
+  ipcMain.handle('jobs:get', (_, id: number) => repo.getJob(db!, id));
+
+  ipcMain.handle('jobs:create', (_, input: CreateJobInput) => {
+    const id = repo.createJob(db!, input);
+    saveDatabase(db!);
+    scheduler?.reloadJobs();
+    return id;
   });
 
-  ipcMain.handle('mappings:runAll', async (): Promise<RunAllSummary> => {
-    const results = await executeAllEnabled(db!, 'manual');
+  ipcMain.handle('jobs:update', (_, id: number, input: UpdateJobInput) => {
+    repo.updateJob(db!, id, input);
+    saveDatabase(db!);
+    scheduler?.reloadJobs();
+  });
+
+  ipcMain.handle('jobs:delete', (_, id: number) => {
+    repo.deleteJob(db!, id);
+    saveDatabase(db!);
+    scheduler?.reloadJobs();
+  });
+
+  ipcMain.handle('jobs:setEnabled', (_, id: number, enabled: boolean) => {
+    repo.setJobEnabled(db!, id, enabled);
+    saveDatabase(db!);
+    scheduler?.reloadJobs();
+  });
+
+  ipcMain.handle('jobs:getStats', (_, id: number) => repo.getJobStats(db!, id));
+
+  ipcMain.handle('jobs:run', async (_, id: number): Promise<RunResult> => {
+    return executeJob(db!, id, 'manual');
+  });
+
+  ipcMain.handle('jobs:runAll', async (): Promise<RunAllSummary> => {
+    const results = await executeAllEnabledJobs(db!, 'manual');
     return {
-      mappingCount: results.length,
-      filesMoved: results.reduce((sum, [, r]) => sum + r.filesMoved, 0),
-      filesSkipped: results.reduce((sum, [, r]) => sum + r.filesSkipped, 0),
-      filesErrored: results.reduce((sum, [, r]) => sum + r.filesErrored, 0),
+      jobCount: results.length,
+      mappingCount: results.reduce((sum, r) => sum + r.fileOutcomes.length, 0),
+      filesMoved: results.reduce((sum, r) => sum + r.filesMoved, 0),
+      filesSkipped: results.reduce((sum, r) => sum + r.filesSkipped, 0),
+      filesErrored: results.reduce((sum, r) => sum + r.filesErrored, 0),
     };
   });
 
-  ipcMain.handle('history:list', (_, mappingId?: number | null) => repo.listRuns(db!, mappingId));
+  ipcMain.handle('history:list', (_, filter?: HistoryListFilter | number | null) => repo.listRuns(db!, filter));
 
   ipcMain.handle('history:getDetail', (_, runId: number) => repo.getRunDetail(db!, runId));
 
@@ -317,13 +352,15 @@ function registerIPCHandlers(): void {
 app.whenReady().then(async () => {
   const startHidden = process.argv.includes('--start-hidden');
   db = await initDatabase();
+  repo.migrateChainsToJobs(db);
+  saveDatabase(db);
 
-  scheduler = new SchedulerService(db, (mappingId, result) => {
-    const record = repo.getMapping(db!, mappingId);
-    const mappingName = record?.name ?? `mapping #${mappingId}`;
+  scheduler = new SchedulerService(db, (jobId, result) => {
+    const job = repo.getJob(db!, jobId);
+    const jobName = job?.name ?? `job #${jobId}`;
     showTrayNotification(
       'FileShuttle: scheduled run finished',
-      `"${mappingName}" — moved ${result.filesMoved}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`
+      `"${jobName}" — moved ${result.filesMoved}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`
     );
   });
 

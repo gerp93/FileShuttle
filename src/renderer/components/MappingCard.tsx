@@ -8,12 +8,6 @@ const CONFLICT_LABELS: Record<string, string> = {
   auto_rename: 'Keep both (rename)',
 };
 
-function scheduleSummary(record: MappingRecord): string {
-  if (record.scheduleType === 'interval') return `Every ${record.scheduleIntervalMinutes} min`;
-  if (record.scheduleType === 'daily_at') return `Daily at ${record.scheduleDailyTime}`;
-  return 'Manual only';
-}
-
 function relativeTime(iso: string): string {
   const when = new Date(iso);
   const seconds = (Date.now() - when.getTime()) / 1000;
@@ -41,8 +35,6 @@ interface Props {
 export default function MappingCard({ record, onChanged }: Props) {
   const navigate = useNavigate();
   const [stats, setStats] = useState<RunStats | null>(null);
-  const [status, setStatus] = useState('');
-  const [running, setRunning] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
@@ -57,22 +49,6 @@ export default function MappingCard({ record, onChanged }: Props) {
     const count = accomplished(last, record.actionType);
     const runLabel = `${stats.runCount} run${stats.runCount !== 1 ? 's' : ''} total`;
     return `Last run ${relativeTime(last.startedAt)} — ${label} ${count}, skipped ${last.filesSkipped}, errored ${last.filesErrored}   ·   ${runLabel}`;
-  };
-
-  const runNow = async () => {
-    setRunning(true);
-    try {
-      const result = await window.fileshuttleAPI.mappings.run(record.id);
-      const label = record.actionType === 'copy' ? 'Copied' : record.actionType === 'delete' ? 'Deleted' : 'Moved';
-      const count = accomplished(result, record.actionType);
-      setStatus(`${label} ${count}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`);
-      const newStats = await window.fileshuttleAPI.mappings.getStats(record.id);
-      setStats(newStats);
-    } catch (err) {
-      setStatus(`Run failed: ${String(err)}`);
-    } finally {
-      setRunning(false);
-    }
   };
 
   const toggleEnabled = async (enabled: boolean) => {
@@ -110,7 +86,7 @@ export default function MappingCard({ record, onChanged }: Props) {
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-        <span className="badge">⏱ {scheduleSummary(record)}</span>
+        <span className="badge">{record.actionType}</span>
         {record.actionType !== 'delete' && (
           <span className="badge">{CONFLICT_LABELS[record.conflictPolicy] ?? record.conflictPolicy}</span>
         )}
@@ -119,26 +95,26 @@ export default function MappingCard({ record, onChanged }: Props) {
         ) : (
           <span className="badge">All files</span>
         )}
+        {record.keepNewest != null && record.actionType !== 'copy' && (
+          <span className="badge">Keep newest {record.keepNewest}</span>
+        )}
       </div>
 
       <p className="muted">{statsLine()}</p>
-      {status && <p className="muted">{status}</p>}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-        <button className="primary" onClick={() => void runNow()} disabled={running}>
-          {running ? 'Running...' : 'Run Now'}
-        </button>
-        <div>
-          <button className="text" onClick={() => navigate(`/editor/${record.id}`)}>Edit</button>
-          <button className="text danger" onClick={() => setConfirmDelete(true)}>Delete</button>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+        <button className="text" onClick={() => navigate(`/editor/${record.id}`)}>Edit</button>
+        <button className="text danger" onClick={() => setConfirmDelete(true)}>Delete</button>
       </div>
 
       {confirmDelete && (
         <div className="dialog-overlay">
           <div className="dialog">
             <h3>Delete mapping?</h3>
-            <p>&quot;{record.name}&quot; and its run history will be permanently deleted.</p>
+            <p>
+              &quot;{record.name}&quot; and its run history will be permanently deleted. Jobs that use this mapping
+              will drop this step.
+            </p>
             <div className="dialog-actions">
               <button className="outline" onClick={() => setConfirmDelete(false)}>Cancel</button>
               <button className="primary" onClick={() => void doDelete()}>Delete</button>

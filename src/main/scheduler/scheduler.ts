@@ -1,10 +1,10 @@
 import cron from 'node-cron';
 import { Database } from 'sql.js';
-import { MappingRecord } from '../../shared/types';
+import { JobRecord } from '../../shared/types';
 import * as repo from '../database/repository';
-import { executeMapping } from '../services/runService';
+import { executeJob } from '../services/runService';
 
-type ScheduledRunCallback = (mappingId: number, result: import('../../shared/types').RunResult) => void;
+type ScheduledRunCallback = (jobId: number, result: import('../../shared/types').RunResult) => void;
 
 interface ScheduledJob {
   intervalId?: NodeJS.Timeout;
@@ -36,24 +36,14 @@ export class SchedulerService {
 
   reloadJobs(): void {
     this.shutdown();
-    for (const record of repo.listMappings(this.db, true)) {
+    for (const record of repo.listJobs(this.db, true)) {
       if (record.scheduleType === 'manual') continue;
       const job = this.buildJob(record);
       if (job) this.jobs.set(record.id, job);
     }
   }
 
-  runNow(mappingId: number): void {
-    setImmediate(async () => {
-      try {
-        await executeMapping(this.db, mappingId, 'manual');
-      } catch (err) {
-        console.error(`Run failed for mapping_id=${mappingId}`, err);
-      }
-    });
-  }
-
-  private buildJob(record: MappingRecord): ScheduledJob | null {
+  private buildJob(record: JobRecord): ScheduledJob | null {
     if (record.scheduleType === 'interval') {
       if (!record.scheduleIntervalMinutes) return null;
       const intervalMs = record.scheduleIntervalMinutes * 60 * 1000;
@@ -71,13 +61,13 @@ export class SchedulerService {
     return null;
   }
 
-  private runScheduled(mappingId: number): void {
+  private runScheduled(jobId: number): void {
     void (async () => {
       try {
-        const result = await executeMapping(this.db, mappingId, 'scheduled');
-        this.onScheduledRunComplete?.(mappingId, result);
+        const result = await executeJob(this.db, jobId, 'scheduled');
+        this.onScheduledRunComplete?.(jobId, result);
       } catch (err) {
-        console.error(`Scheduled run failed for mapping_id=${mappingId}`, err);
+        console.error(`Scheduled run failed for job_id=${jobId}`, err);
       }
     })();
   }

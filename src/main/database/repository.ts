@@ -1,13 +1,17 @@
 import { Database } from 'sql.js';
 import {
+  CreateJobInput,
   CreateMappingInput,
   FileOutcome,
   FilterRule,
+  HistoryListFilter,
+  JobRecord,
   MappingConfig,
   MappingRecord,
   RunResult,
   RunStats,
   RunSummary,
+  UpdateJobInput,
   UpdateMappingInput,
 } from '../../shared/types';
 import { lastInsertId, queryAll, queryOne, run, toBool, toInt } from './dbHelpers';
@@ -47,6 +51,7 @@ function rowToRecord(db: Database, row: Record<string, unknown>): MappingRecord 
     updatedAt: String(row.updated_at),
     filters: loadFilters(db, id),
     nextMappingId: toInt(row.next_mapping_id),
+    keepNewest: toInt(row.keep_newest),
   };
 }
 
@@ -74,6 +79,7 @@ export function toMappingConfig(record: MappingRecord): MappingConfig {
     filterMatchMode: record.filterMatchMode,
     filters: record.filters,
     actionType: record.actionType,
+    keepNewest: record.keepNewest,
   };
 }
 
@@ -82,8 +88,8 @@ export function createMapping(db: Database, input: CreateMappingInput): number {
     db,
     `INSERT INTO mappings
       (name, source_path, dest_path, recursive, action_type, conflict_policy, filter_match_mode,
-       enabled, schedule_type, schedule_interval_minutes, schedule_daily_time, next_mapping_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       keep_newest, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time, next_mapping_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.sourcePath,
@@ -92,6 +98,7 @@ export function createMapping(db: Database, input: CreateMappingInput): number {
       input.actionType,
       input.conflictPolicy,
       input.filterMatchMode,
+      input.keepNewest,
       input.enabled ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
@@ -109,7 +116,7 @@ export function updateMapping(db: Database, mappingId: number, input: UpdateMapp
     db,
     `UPDATE mappings SET
       name = ?, source_path = ?, dest_path = ?, recursive = ?, action_type = ?,
-      conflict_policy = ?, filter_match_mode = ?, enabled = ?, schedule_type = ?,
+      conflict_policy = ?, filter_match_mode = ?, keep_newest = ?, enabled = ?, schedule_type = ?,
       schedule_interval_minutes = ?, schedule_daily_time = ?, next_mapping_id = ?,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = ?`,
@@ -121,6 +128,7 @@ export function updateMapping(db: Database, mappingId: number, input: UpdateMapp
       input.actionType,
       input.conflictPolicy,
       input.filterMatchMode,
+      input.keepNewest,
       input.enabled ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
@@ -161,6 +169,8 @@ function rowToRunSummary(row: Record<string, unknown>): RunSummary {
     id: Number(row.id),
     mappingId: Number(row.mapping_id),
     mappingNameSnapshot: String(row.mapping_name_snapshot),
+    jobId: toInt(row.job_id),
+    jobNameSnapshot: row.job_name_snapshot ? String(row.job_name_snapshot) : null,
     triggerType: String(row.trigger_type) as RunSummary['triggerType'],
     startedAt: String(row.started_at),
     finishedAt: String(row.finished_at),
@@ -209,6 +219,8 @@ export function recordRun(
     status: RunSummary['status'];
     errorMessage?: string | null;
     triggeredByRunId?: number | null;
+    jobId?: number | null;
+    jobNameSnapshot?: string | null;
   }
 ): number {
   run(
@@ -216,8 +228,8 @@ export function recordRun(
     `INSERT INTO run_history
       (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
        files_moved, files_copied, files_deleted, files_skipped, files_errored, status, error_message,
-       triggered_by_run_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       triggered_by_run_id, job_id, job_name_snapshot)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       params.mappingId,
       params.mappingNameSnapshot,
@@ -232,6 +244,8 @@ export function recordRun(
       params.status,
       params.errorMessage ?? null,
       params.triggeredByRunId ?? null,
+      params.jobId ?? null,
+      params.jobNameSnapshot ?? null,
     ]
   );
   const runId = lastInsertId(db);
@@ -246,7 +260,14 @@ export function recordRun(
   return runId;
 }
 
-export function listRuns(db: Database, mappingId?: number | null): RunSummary[] {
+export function listRuns(db: Database, filter?: HistoryListFilter | number | null): RunSummary[] {
+  const mappingId = typeof filter === 'number' || filter == null ? filter : filter.mappingId;
+  const jobId = typeof filter === 'object' && filter != null ? filter.jobId : null;
+  if (jobId != null) {
+    return queryAll(db, 'SELECT * FROM run_history WHERE job_id = ? ORDER BY started_at DESC', [jobId]).map(
+      rowToRunSummary
+    );
+  }
   if (mappingId != null) {
     return queryAll(db, 'SELECT * FROM run_history WHERE mapping_id = ? ORDER BY started_at DESC', [mappingId]).map(
       rowToRunSummary
@@ -302,4 +323,171 @@ export function setSetting(db: Database, key: string, value: string): void {
     'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
     [key, value]
   );
+}
+
+function loadJobSteps(db: Database, jobId: number): MappingRecord[] {
+  const rows = queryAll(
+    db,
+    `SELECT m.* FROM job_steps s
+     JOIN mappings m ON m.id = s.mapping_id
+     WHERE s.job_id = ?
+     ORDER BY s.sort_order, s.id`,
+    [jobId]
+  );
+  return rows.map((row) => rowToRecord(db, row));
+}
+
+function rowToJob(db: Database, row: Record<string, unknown>): JobRecord {
+  const id = Number(row.id);
+  return {
+    id,
+    name: String(row.name),
+    enabled: toBool(row.enabled),
+    scheduleType: String(row.schedule_type) as JobRecord['scheduleType'],
+    scheduleIntervalMinutes: toInt(row.schedule_interval_minutes),
+    scheduleDailyTime: row.schedule_daily_time ? String(row.schedule_daily_time) : null,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    steps: loadJobSteps(db, id),
+  };
+}
+
+function replaceJobSteps(db: Database, jobId: number, mappingIds: number[]): void {
+  run(db, 'DELETE FROM job_steps WHERE job_id = ?', [jobId]);
+  mappingIds.forEach((mappingId, index) => {
+    run(db, 'INSERT INTO job_steps (job_id, mapping_id, sort_order) VALUES (?, ?, ?)', [jobId, mappingId, index]);
+  });
+}
+
+export function createJob(db: Database, input: CreateJobInput): number {
+  run(
+    db,
+    `INSERT INTO jobs
+      (name, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time)
+     VALUES (?, ?, ?, ?, ?)`,
+    [
+      input.name,
+      input.enabled ? 1 : 0,
+      input.scheduleType,
+      input.scheduleIntervalMinutes,
+      input.scheduleDailyTime,
+    ]
+  );
+  const jobId = lastInsertId(db);
+  replaceJobSteps(db, jobId, input.mappingIds);
+  return jobId;
+}
+
+export function updateJob(db: Database, jobId: number, input: UpdateJobInput): void {
+  run(
+    db,
+    `UPDATE jobs SET
+      name = ?, enabled = ?, schedule_type = ?, schedule_interval_minutes = ?,
+      schedule_daily_time = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = ?`,
+    [
+      input.name,
+      input.enabled ? 1 : 0,
+      input.scheduleType,
+      input.scheduleIntervalMinutes,
+      input.scheduleDailyTime,
+      jobId,
+    ]
+  );
+  replaceJobSteps(db, jobId, input.mappingIds);
+}
+
+export function deleteJob(db: Database, jobId: number): void {
+  run(db, 'DELETE FROM jobs WHERE id = ?', [jobId]);
+}
+
+export function setJobEnabled(db: Database, jobId: number, enabled: boolean): void {
+  run(
+    db,
+    "UPDATE jobs SET enabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+    [enabled ? 1 : 0, jobId]
+  );
+}
+
+export function getJob(db: Database, jobId: number): JobRecord | null {
+  const row = queryOne(db, 'SELECT * FROM jobs WHERE id = ?', [jobId]);
+  return row ? rowToJob(db, row) : null;
+}
+
+export function listJobs(db: Database, enabledOnly = false): JobRecord[] {
+  const sql = enabledOnly
+    ? 'SELECT * FROM jobs WHERE enabled = 1 ORDER BY name COLLATE NOCASE'
+    : 'SELECT * FROM jobs ORDER BY name COLLATE NOCASE';
+  return queryAll(db, sql).map((row) => rowToJob(db, row));
+}
+
+export function getJobStats(db: Database, jobId: number): RunStats {
+  const roots = queryAll(
+    db,
+    `SELECT * FROM run_history
+     WHERE job_id = ? AND triggered_by_run_id IS NULL AND trigger_type != ?
+     ORDER BY started_at DESC`,
+    [jobId, 'undo']
+  );
+  if (!roots.length) return { runCount: 0, lastRun: null };
+
+  const all = queryAll(db, 'SELECT * FROM run_history WHERE job_id = ? ORDER BY id', [jobId]).map(rowToRunSummary);
+  const lastRoot = rowToRunSummary(roots[0]);
+  const chain: RunSummary[] = [];
+  let currentId: number | null = lastRoot.id;
+  while (currentId != null) {
+    const node = all.find((r) => r.id === currentId);
+    if (!node) break;
+    chain.push(node);
+    const next = all.find((r) => r.triggeredByRunId === currentId);
+    currentId = next?.id ?? null;
+  }
+
+  return {
+    runCount: roots.length,
+    lastRun: {
+      ...lastRoot,
+      filesMoved: chain.reduce((sum, r) => sum + r.filesMoved, 0),
+      filesCopied: chain.reduce((sum, r) => sum + r.filesCopied, 0),
+      filesDeleted: chain.reduce((sum, r) => sum + r.filesDeleted, 0),
+      filesSkipped: chain.reduce((sum, r) => sum + r.filesSkipped, 0),
+      filesErrored: chain.reduce((sum, r) => sum + r.filesErrored, 0),
+    },
+  };
+}
+
+/** Turn existing mapping chains into jobs once, so scheduled work keeps firing. */
+export function migrateChainsToJobs(db: Database): void {
+  if (getSetting(db, 'jobs_migrated') === '1') return;
+
+  const mappings = listMappings(db);
+  const referenced = new Set(
+    mappings.map((m) => m.nextMappingId).filter((id): id is number => id != null)
+  );
+
+  for (const mapping of mappings) {
+    const isHead = !referenced.has(mapping.id);
+    const hasOwnSchedule = mapping.scheduleType !== 'manual';
+    if (!isHead && !hasOwnSchedule) continue;
+
+    const mappingIds: number[] = [];
+    const visited = new Set<number>();
+    let current: MappingRecord | null = mapping;
+    while (current && !visited.has(current.id)) {
+      visited.add(current.id);
+      mappingIds.push(current.id);
+      current = current.nextMappingId != null ? getMapping(db, current.nextMappingId) : null;
+    }
+
+    createJob(db, {
+      name: mapping.name,
+      enabled: mapping.enabled,
+      scheduleType: mapping.scheduleType,
+      scheduleIntervalMinutes: mapping.scheduleIntervalMinutes,
+      scheduleDailyTime: mapping.scheduleDailyTime,
+      mappingIds,
+    });
+  }
+
+  setSetting(db, 'jobs_migrated', '1');
 }

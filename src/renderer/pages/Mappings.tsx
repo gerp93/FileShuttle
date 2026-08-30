@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { MappingRecord, RunAllSummary } from '../../shared/types';
+import { MappingRecord } from '../../shared/types';
 import MappingCard from '../components/MappingCard';
 
 function matches(record: MappingRecord, query: string): boolean {
@@ -16,8 +16,6 @@ function matches(record: MappingRecord, query: string): boolean {
 export default function Mappings() {
   const [mappings, setMappings] = useState<MappingRecord[]>([]);
   const [search, setSearch] = useState('');
-  const [summary, setSummary] = useState('');
-  const [runningAll, setRunningAll] = useState(false);
 
   const load = async () => {
     setMappings(await window.fileshuttleAPI.mappings.list());
@@ -29,30 +27,18 @@ export default function Mappings() {
 
   const filtered = mappings.filter((r) => matches(r, search));
 
-  const runAll = async () => {
-    setRunningAll(true);
-    try {
-      const result: RunAllSummary = await window.fileshuttleAPI.mappings.runAll();
-      setSummary(
-        `Ran ${result.mappingCount} enabled mapping(s): moved ${result.filesMoved}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`
-      );
-      await load();
-    } finally {
-      setRunningAll(false);
-    }
-  };
-
   return (
     <div>
       <div className="page-header">
         <h1 className="page-title">Mappings</h1>
-        <button className="primary" onClick={() => void runAll()} disabled={runningAll}>
-          Run All Enabled
-        </button>
         <Link to="/editor">
           <button className="primary">New Mapping</button>
         </Link>
       </div>
+
+      <p className="muted" style={{ marginTop: 0 }}>
+        Reusable steps. Add them to a job to run them, in order, and to reuse the same mapping in more than one job.
+      </p>
 
       <label className="field" style={{ marginBottom: 12 }}>
         Search mappings
@@ -64,10 +50,8 @@ export default function Mappings() {
         />
       </label>
 
-      {summary && <p className="muted">{summary}</p>}
-
       {!mappings.length ? (
-        <div className="empty-state">No mappings yet. Click &quot;New Mapping&quot; to move your first batch of files.</div>
+        <div className="empty-state">No mappings yet. Click &quot;New Mapping&quot; to define a copy, move, or delete step.</div>
       ) : !filtered.length ? (
         <div className="empty-state">No mappings match &quot;{search}&quot;.</div>
       ) : (

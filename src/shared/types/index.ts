@@ -40,6 +40,7 @@ export interface MappingConfig {
   filterMatchMode: FilterMatchMode;
   filters: FilterRule[];
   actionType: ActionType;
+  keepNewest: number | null;
 }
 
 export interface FileOutcome {
@@ -78,12 +79,15 @@ export interface MappingRecord {
   updatedAt: string;
   filters: FilterRule[];
   nextMappingId: number | null;
+  keepNewest: number | null;
 }
 
 export interface RunSummary {
   id: number;
   mappingId: number;
   mappingNameSnapshot: string;
+  jobId: number | null;
+  jobNameSnapshot: string | null;
   triggerType: 'manual' | 'scheduled' | 'undo';
   startedAt: string;
   finishedAt: string;
@@ -112,6 +116,7 @@ export interface CreateMappingInput {
   filterMatchMode: FilterMatchMode;
   nextMappingId: number | null;
   actionType: ActionType;
+  keepNewest: number | null;
 }
 
 export type UpdateMappingInput = CreateMappingInput;
@@ -134,8 +139,37 @@ export interface RunStats {
 }
 
 export interface RunAllSummary {
+  jobCount: number;
   mappingCount: number;
   filesMoved: number;
   filesSkipped: number;
   filesErrored: number;
+}
+
+export interface JobRecord {
+  id: number;
+  name: string;
+  enabled: boolean;
+  scheduleType: ScheduleType;
+  scheduleIntervalMinutes: number | null;
+  scheduleDailyTime: string | null;
+  createdAt: string;
+  updatedAt: string;
+  steps: MappingRecord[];
+}
+
+export interface CreateJobInput {
+  name: string;
+  enabled: boolean;
+  scheduleType: ScheduleType;
+  scheduleIntervalMinutes: number | null;
+  scheduleDailyTime: string | null;
+  mappingIds: number[];
+}
+
+export type UpdateJobInput = CreateJobInput;
+
+export interface HistoryListFilter {
+  mappingId?: number | null;
+  jobId?: number | null;
 }

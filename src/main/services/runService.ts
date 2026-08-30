@@ -1,5 +1,5 @@
 import { Database } from 'sql.js';
-import { RunResult } from '../../shared/types';
+import { JobRecord, RunResult } from '../../shared/types';
 import * as repo from '../database/repository';
 import { saveDatabase } from '../database/schema';
 import { runMapping, undoRun } from '../engine/mover';
@@ -8,52 +8,73 @@ export function persistDb(db: Database): void {
   saveDatabase(db);
 }
 
-export async function executeMapping(
+export async function executeJob(
   db: Database,
-  mappingId: number,
-  triggerType: 'manual' | 'scheduled' | 'undo'
+  jobId: number,
+  triggerType: 'manual' | 'scheduled'
 ): Promise<RunResult> {
-  const record = repo.getMapping(db, mappingId);
-  if (!record) {
-    throw new Error(`No mapping with id ${mappingId}`);
+  const job = repo.getJob(db, jobId);
+  if (!job) {
+    throw new Error(`No job with id ${jobId}`);
   }
-  const chainResults = await runChain(db, mappingId, triggerType, new Set());
+  const results = await runJobSteps(db, job, triggerType);
   persistDb(db);
-  return chainResults[0][1];
+  return aggregateResults(results);
 }
 
-async function runChain(
+async function runJobSteps(
   db: Database,
-  mappingId: number,
-  triggerType: 'manual' | 'scheduled' | 'undo',
-  visited: Set<number>
-): Promise<Array<[number, RunResult]>> {
-  const results: Array<[number, RunResult]> = [];
-  let currentId: number | null = mappingId;
+  job: JobRecord,
+  triggerType: 'manual' | 'scheduled'
+): Promise<RunResult[]> {
+  const results: RunResult[] = [];
   let triggeredByRunId: number | null = null;
 
-  while (currentId !== null && !visited.has(currentId)) {
-    const record = repo.getMapping(db, currentId);
-    if (!record) break;
-    visited.add(currentId);
-
-    const result = await runMapping(repo.toMappingConfig(record));
+  for (const mapping of job.steps) {
+    if (!mapping.enabled) continue;
+    const result = await runMapping(repo.toMappingConfig(mapping));
     const status = computeStatus(result);
     const runId = repo.recordRun(db, {
-      mappingId: currentId,
-      mappingNameSnapshot: record.name,
+      mappingId: mapping.id,
+      mappingNameSnapshot: mapping.name,
       triggerType,
       result,
       status,
       triggeredByRunId,
+      jobId: job.id,
+      jobNameSnapshot: job.name,
     });
-    results.push([currentId, result]);
-
+    results.push(result);
     triggeredByRunId = runId;
-    currentId = record.nextMappingId;
   }
 
   return results;
+}
+
+function aggregateResults(results: RunResult[]): RunResult {
+  if (!results.length) {
+    const now = new Date().toISOString();
+    return {
+      startedAt: now,
+      finishedAt: now,
+      fileOutcomes: [],
+      filesMoved: 0,
+      filesCopied: 0,
+      filesDeleted: 0,
+      filesSkipped: 0,
+      filesErrored: 0,
+    };
+  }
+  return {
+    startedAt: results[0].startedAt,
+    finishedAt: results[results.length - 1].finishedAt,
+    fileOutcomes: results.flatMap((r) => r.fileOutcomes),
+    filesMoved: results.reduce((sum, r) => sum + r.filesMoved, 0),
+    filesCopied: results.reduce((sum, r) => sum + r.filesCopied, 0),
+    filesDeleted: results.reduce((sum, r) => sum + r.filesDeleted, 0),
+    filesSkipped: results.reduce((sum, r) => sum + r.filesSkipped, 0),
+    filesErrored: results.reduce((sum, r) => sum + r.filesErrored, 0),
+  };
 }
 
 export function executeUndo(db: Database, runId: number): RunResult {
@@ -72,6 +93,8 @@ export function executeUndo(db: Database, runId: number): RunResult {
     triggerType: 'undo',
     result,
     status,
+    jobId: originalRun.jobId,
+    jobNameSnapshot: originalRun.jobNameSnapshot,
   });
   repo.markRunUndone(db, runId, undoRunId);
   persistDb(db);
@@ -88,22 +111,19 @@ function baseMappingName(db: Database, run: { mappingId: number; mappingNameSnap
   return snapshot;
 }
 
-export async function executeAllEnabled(
+export async function executeAllEnabledJobs(
   db: Database,
   triggerType: 'manual' | 'scheduled'
-): Promise<Array<[number, RunResult]>> {
-  const visited = new Set<number>();
-  const allResults: Array<[number, RunResult]> = [];
-  for (const record of repo.listMappings(db, true)) {
-    if (visited.has(record.id)) continue;
-    allResults.push(...(await runChain(db, record.id, triggerType, visited)));
+): Promise<RunResult[]> {
+  const results: RunResult[] = [];
+  for (const job of repo.listJobs(db, true)) {
+    results.push(await executeJob(db, job.id, triggerType));
   }
-  persistDb(db);
-  return allResults;
+  return results;
 }
 
 function computeStatus(result: RunResult): 'success' | 'partial' | 'error' {
-  const accomplished = result.filesMoved + result.filesDeleted;
+  const accomplished = result.filesMoved + result.filesCopied + result.filesDeleted;
   if (result.filesErrored && !accomplished) return 'error';
   if ((result.filesErrored || result.filesSkipped) && accomplished) return 'partial';
   return 'success';

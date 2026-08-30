@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CreateMappingInput, FilterRule, MappingRecord } from '../../shared/types';
+import { CreateMappingInput, FilterRule } from '../../shared/types';
 import FilterRow from '../components/FilterRow';
 
 const ACTION_TYPES = [
@@ -15,14 +15,6 @@ const CONFLICT_POLICIES = [
   ['auto_rename', 'Auto-rename (keep both)'],
 ] as const;
 
-const SCHEDULE_TYPES = [
-  ['manual', 'Manual only'],
-  ['interval', 'Every N minutes'],
-  ['daily_at', 'Daily at a specific time'],
-] as const;
-
-const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
-
 export default function MappingEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -36,19 +28,13 @@ export default function MappingEditor() {
   const [recursive, setRecursive] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [conflictPolicy, setConflictPolicy] = useState<'skip' | 'overwrite' | 'auto_rename'>('skip');
-  const [scheduleType, setScheduleType] = useState<'manual' | 'interval' | 'daily_at'>('manual');
-  const [intervalMinutes, setIntervalMinutes] = useState('30');
-  const [dailyTime, setDailyTime] = useState('09:00');
   const [filterMatchMode, setFilterMatchMode] = useState<'all' | 'any'>('all');
   const [filters, setFilters] = useState<FilterRule[]>([]);
-  const [nextMappingId, setNextMappingId] = useState<number | null>(null);
-  const [otherMappings, setOtherMappings] = useState<MappingRecord[]>([]);
+  const [keepNewestEnabled, setKeepNewestEnabled] = useState(false);
+  const [keepNewestCount, setKeepNewestCount] = useState('3');
   const [error, setError] = useState('');
 
   useEffect(() => {
-    void window.fileshuttleAPI.mappings.list().then((all) => {
-      setOtherMappings(all.filter((m) => m.id !== mappingId));
-    });
     if (mappingId) {
       void window.fileshuttleAPI.mappings.get(mappingId).then((record) => {
         if (!record) return;
@@ -59,12 +45,10 @@ export default function MappingEditor() {
         setRecursive(record.recursive);
         setEnabled(record.enabled);
         setConflictPolicy(record.conflictPolicy);
-        setScheduleType(record.scheduleType);
-        setIntervalMinutes(String(record.scheduleIntervalMinutes ?? 30));
-        setDailyTime(record.scheduleDailyTime ?? '09:00');
         setFilterMatchMode(record.filterMatchMode);
         setFilters(record.filters);
-        setNextMappingId(record.nextMappingId);
+        setKeepNewestEnabled(record.keepNewest != null);
+        setKeepNewestCount(String(record.keepNewest ?? 3));
       });
     }
   }, [mappingId]);
@@ -83,21 +67,13 @@ export default function MappingEditor() {
       return null;
     }
 
-    let scheduleIntervalMinutes: number | null = null;
-    let scheduleDailyTime: string | null = null;
-
-    if (scheduleType === 'interval') {
-      if (!/^\d+$/.test(intervalMinutes.trim())) {
-        setError('Interval must be a whole number of minutes.');
+    let keepNewest: number | null = null;
+    if (actionType !== 'copy' && keepNewestEnabled) {
+      if (!/^\d+$/.test(keepNewestCount.trim()) || parseInt(keepNewestCount.trim(), 10) < 1) {
+        setError('Keep newest must be a whole number of at least 1.');
         return null;
       }
-      scheduleIntervalMinutes = parseInt(intervalMinutes.trim(), 10);
-    } else if (scheduleType === 'daily_at') {
-      if (!TIME_RE.test(dailyTime.trim())) {
-        setError('Time must be in HH:MM 24-hour format, e.g. 09:00.');
-        return null;
-      }
-      scheduleDailyTime = dailyTime.trim();
+      keepNewest = parseInt(keepNewestCount.trim(), 10);
     }
 
     setError('');
@@ -108,13 +84,14 @@ export default function MappingEditor() {
       recursive,
       conflictPolicy,
       enabled,
-      scheduleType,
-      scheduleIntervalMinutes,
-      scheduleDailyTime,
+      scheduleType: 'manual',
+      scheduleIntervalMinutes: null,
+      scheduleDailyTime: null,
       filters,
       filterMatchMode,
-      nextMappingId,
+      nextMappingId: null,
       actionType,
+      keepNewest,
     };
   };
 
@@ -126,7 +103,7 @@ export default function MappingEditor() {
     } else {
       await window.fileshuttleAPI.mappings.update(mappingId!, input);
     }
-    navigate('/');
+    navigate('/mappings');
   };
 
   const browseSource = async () => {
@@ -205,46 +182,6 @@ export default function MappingEditor() {
 
       <hr className="divider" />
 
-      <label className="field" style={{ marginBottom: 12 }}>
-        Schedule
-        <select value={scheduleType} onChange={(e) => setScheduleType(e.target.value as typeof scheduleType)}>
-          {SCHEDULE_TYPES.map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
-          ))}
-        </select>
-      </label>
-
-      {scheduleType === 'interval' && (
-        <label className="field" style={{ marginBottom: 12 }}>
-          Interval (minutes)
-          <input type="number" value={intervalMinutes} onChange={(e) => setIntervalMinutes(e.target.value)} />
-        </label>
-      )}
-
-      {scheduleType === 'daily_at' && (
-        <label className="field" style={{ marginBottom: 12 }}>
-          Time (HH:MM, 24-hour)
-          <input type="text" value={dailyTime} onChange={(e) => setDailyTime(e.target.value)} />
-        </label>
-      )}
-
-      <hr className="divider" />
-
-      <label className="field" style={{ marginBottom: 12 }}>
-        When this finishes, then run
-        <select
-          value={nextMappingId ?? ''}
-          onChange={(e) => setNextMappingId(e.target.value ? parseInt(e.target.value, 10) : null)}
-        >
-          <option value="">Nothing — run independently</option>
-          {otherMappings.map((m) => (
-            <option key={m.id} value={m.id}>{m.name}</option>
-          ))}
-        </select>
-      </label>
-
-      <hr className="divider" />
-
       <div className="page-header">
         <span>Filters (leave empty to move every file)</span>
         <select value={filterMatchMode} onChange={(e) => setFilterMatchMode(e.target.value as 'all' | 'any')}>
@@ -269,13 +206,43 @@ export default function MappingEditor() {
         />
       ))}
 
+      {actionType !== 'copy' && (
+        <div style={{ marginTop: 8, marginBottom: 12 }}>
+          <div className="switch-row" style={{ marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              id="keep-newest"
+              checked={keepNewestEnabled}
+              onChange={(e) => setKeepNewestEnabled(e.target.checked)}
+            />
+            <label htmlFor="keep-newest">Keep the newest matching files in this folder</label>
+          </div>
+          {keepNewestEnabled && (
+            <label className="field" style={{ maxWidth: 220 }}>
+              How many to keep
+              <input
+                type="number"
+                min={1}
+                value={keepNewestCount}
+                onChange={(e) => setKeepNewestCount(e.target.value)}
+              />
+            </label>
+          )}
+          <p className="muted" style={{ margin: '8px 0 0' }}>
+            After filters match, files are ranked by last modified time. The newest N stay;
+            the rest are {actionType === 'delete' ? 'deleted' : 'moved'}. Pair this with a copy/move
+            mapping in the same job to prune a backup folder.
+          </p>
+        </div>
+      )}
+
       <hr className="divider" />
 
       {error && <p className="error-text">{error}</p>}
 
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="primary" onClick={() => void save()}>Save</button>
-        <button className="outline" onClick={() => navigate('/')}>Cancel</button>
+        <button className="outline" onClick={() => navigate('/mappings')}>Cancel</button>
       </div>
     </div>
   );

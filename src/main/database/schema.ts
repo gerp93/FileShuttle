@@ -19,6 +19,7 @@ const STATEMENTS = [
                                  CHECK (conflict_policy IN ('overwrite','skip','auto_rename')),
     filter_match_mode           TEXT NOT NULL DEFAULT 'all'
                                  CHECK (filter_match_mode IN ('all','any')),
+    keep_newest                 INTEGER,
     enabled                     INTEGER NOT NULL DEFAULT 1,
     schedule_type               TEXT NOT NULL DEFAULT 'manual'
                                  CHECK (schedule_type IN ('manual','interval','daily_at')),
@@ -66,6 +67,23 @@ const STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS app_settings (
     key    TEXT PRIMARY KEY,
     value  TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS jobs (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                        TEXT NOT NULL,
+    enabled                     INTEGER NOT NULL DEFAULT 1,
+    schedule_type               TEXT NOT NULL DEFAULT 'manual'
+                                 CHECK (schedule_type IN ('manual','interval','daily_at')),
+    schedule_interval_minutes   INTEGER,
+    schedule_daily_time         TEXT,
+    created_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS job_steps (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id       INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    mapping_id   INTEGER NOT NULL REFERENCES mappings(id) ON DELETE CASCADE,
+    sort_order   INTEGER NOT NULL DEFAULT 0
   )`,
 ];
 
@@ -120,6 +138,7 @@ function widenMappingsActionTypeCheck(db: Database): void {
                                  CHECK (conflict_policy IN ('overwrite','skip','auto_rename')),
     filter_match_mode           TEXT NOT NULL DEFAULT 'all'
                                  CHECK (filter_match_mode IN ('all','any')),
+    keep_newest                 INTEGER,
     enabled                     INTEGER NOT NULL DEFAULT 1,
     schedule_type               TEXT NOT NULL DEFAULT 'manual'
                                  CHECK (schedule_type IN ('manual','interval','daily_at')),
@@ -165,6 +184,14 @@ function initSchema(db: Database): void {
   addColumnIfMissing(db, 'run_history', 'files_copied', 'files_copied INTEGER NOT NULL DEFAULT 0');
   widenRunHistoryFilesOutcomeCheck(db);
   widenMappingsActionTypeCheck(db);
+  addColumnIfMissing(db, 'mappings', 'keep_newest', 'keep_newest INTEGER');
+  addColumnIfMissing(
+    db,
+    'run_history',
+    'job_id',
+    'job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL'
+  );
+  addColumnIfMissing(db, 'run_history', 'job_name_snapshot', 'job_name_snapshot TEXT');
 }
 
 export async function initDatabase(dbPath?: string): Promise<Database> {

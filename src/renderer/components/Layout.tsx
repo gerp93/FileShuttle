@@ -6,7 +6,10 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
     <div className="app-shell">
       <nav className="nav-rail">
         <img src={logo} alt="FileShuttle" />
-        <NavLink to="/" className={({ isActive }) => `nav-button${isActive ? ' active' : ''}`} title="Mappings">
+        <NavLink to="/" className={({ isActive }) => `nav-button${isActive ? ' active' : ''}`} title="Jobs" end>
+          📋
+        </NavLink>
+        <NavLink to="/mappings" className={({ isActive }) => `nav-button${isActive ? ' active' : ''}`} title="Mappings">
           📁
         </NavLink>
         <NavLink to="/history" className={({ isActive }) => `nav-button${isActive ? ' active' : ''}`} title="History">

@@ -3,13 +3,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FileOutcome, MappingConfig, RunResult } from '../../shared/types';
 import { buildRunResult } from '../database/repository';
-import { evaluateFilters } from './filters';
+import { evaluateFilters, partitionKeepNewest } from './filters';
+
+interface Candidate {
+  filePath: string;
+  mtimeMs: number;
+  stat: fs.Stats;
+}
 
 export async function runMapping(mapping: MappingConfig): Promise<RunResult> {
   const startedAt = new Date();
   const sourceRoot = mapping.sourcePath;
   const outcomes: FileOutcome[] = [];
   const destRoot = mapping.actionType === 'move' || mapping.actionType === 'copy' ? mapping.destPath : null;
+  const candidates: Candidate[] = [];
 
   for (const filePath of iterCandidateFiles(sourceRoot, mapping.recursive)) {
     let stat: fs.Stats;
@@ -37,54 +44,81 @@ export async function runMapping(mapping: MappingConfig): Promise<RunResult> {
       continue;
     }
 
-    if (mapping.actionType === 'delete') {
-      try {
-        await shell.trashItem(filePath);
-        outcomes.push({
-          sourcePath: filePath,
-          destPath: null,
-          outcome: 'deleted',
-          reason: null,
-          sizeBytes: stat.size,
-        });
-      } catch (err) {
-        outcomes.push({
-          sourcePath: filePath,
-          destPath: null,
-          outcome: 'error',
-          reason: String(err),
-          sizeBytes: stat.size,
-        });
-      }
-      continue;
-    }
+    candidates.push({ filePath, mtimeMs: stat.mtimeMs, stat });
+  }
 
-    const destPath = resolveDestination(sourceRoot, destRoot!, filePath);
-    let reason: string | null = null;
-    if (fs.existsSync(destPath)) {
-      const resolved = resolveConflict(destPath, mapping.conflictPolicy);
-      if (resolved === null) {
-        outcomes.push({
-          sourcePath: filePath,
-          destPath: null,
-          outcome: 'skipped',
-          reason: `conflict_${mapping.conflictPolicy}`,
-          sizeBytes: stat.size,
-        });
-        continue;
-      }
-      reason = `conflict_${mapping.conflictPolicy}`;
-      if (resolved !== destPath) {
-        // auto_rename case - use resolved path
-        moveOrCopy(filePath, resolved, mapping.actionType, outcomes, reason, stat.size);
-        continue;
-      }
-    }
+  const keepNewest = mapping.actionType === 'copy' ? null : mapping.keepNewest;
+  const { kept, rest } = partitionKeepNewest(candidates, keepNewest);
 
-    moveOrCopy(filePath, destPath, mapping.actionType, outcomes, reason, stat.size);
+  for (const file of kept) {
+    outcomes.push({
+      sourcePath: file.filePath,
+      destPath: null,
+      outcome: 'skipped',
+      reason: 'kept_newest',
+      sizeBytes: file.stat.size,
+    });
+  }
+
+  for (const file of rest) {
+    await actOnFile(mapping, sourceRoot, destRoot, file.filePath, file.stat, outcomes);
   }
 
   return buildRunResult(startedAt, new Date(), outcomes);
+}
+
+async function actOnFile(
+  mapping: MappingConfig,
+  sourceRoot: string,
+  destRoot: string | null,
+  filePath: string,
+  stat: fs.Stats,
+  outcomes: FileOutcome[]
+): Promise<void> {
+  if (mapping.actionType === 'delete') {
+    try {
+      await shell.trashItem(filePath);
+      outcomes.push({
+        sourcePath: filePath,
+        destPath: null,
+        outcome: 'deleted',
+        reason: null,
+        sizeBytes: stat.size,
+      });
+    } catch (err) {
+      outcomes.push({
+        sourcePath: filePath,
+        destPath: null,
+        outcome: 'error',
+        reason: String(err),
+        sizeBytes: stat.size,
+      });
+    }
+    return;
+  }
+
+  const destPath = resolveDestination(sourceRoot, destRoot!, filePath);
+  let reason: string | null = null;
+  if (fs.existsSync(destPath)) {
+    const resolved = resolveConflict(destPath, mapping.conflictPolicy);
+    if (resolved === null) {
+      outcomes.push({
+        sourcePath: filePath,
+        destPath: null,
+        outcome: 'skipped',
+        reason: `conflict_${mapping.conflictPolicy}`,
+        sizeBytes: stat.size,
+      });
+      return;
+    }
+    reason = `conflict_${mapping.conflictPolicy}`;
+    if (resolved !== destPath) {
+      moveOrCopy(filePath, resolved, mapping.actionType, outcomes, reason, stat.size);
+      return;
+    }
+  }
+
+  moveOrCopy(filePath, destPath, mapping.actionType, outcomes, reason, stat.size);
 }
 
 function moveOrCopy(
