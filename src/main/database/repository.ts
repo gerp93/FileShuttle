@@ -198,6 +198,8 @@ function rowToRunSummary(row: Record<string, unknown>): RunSummary {
     filesDeleted: Number(row.files_deleted),
     filesSkipped: Number(row.files_skipped),
     filesErrored: Number(row.files_errored),
+    filesExtracted: Number(row.files_extracted),
+    filesZipped: Number(row.files_zipped),
     status: String(row.status) as RunSummary['status'],
     errorMessage: row.error_message ? String(row.error_message) : null,
     undoneByRunId: toInt(row.undone_by_run_id),
@@ -219,12 +221,16 @@ export function buildRunResult(startedAt: Date, finishedAt: Date, fileOutcomes: 
     filesDeleted: 0,
     filesSkipped: 0,
     filesErrored: 0,
+    filesExtracted: 0,
+    filesZipped: 0,
   };
   result.filesMoved = countOutcomes(result, 'moved');
   result.filesCopied = countOutcomes(result, 'copied');
   result.filesDeleted = countOutcomes(result, 'deleted');
   result.filesSkipped = countOutcomes(result, 'skipped');
   result.filesErrored = countOutcomes(result, 'error');
+  result.filesExtracted = countOutcomes(result, 'extracted');
+  result.filesZipped = countOutcomes(result, 'zipped');
   return result;
 }
 
@@ -246,9 +252,9 @@ export function recordRun(
     db,
     `INSERT INTO run_history
       (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
-       files_moved, files_copied, files_deleted, files_skipped, files_errored, status, error_message,
-       triggered_by_run_id, job_id, job_name_snapshot)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       files_moved, files_copied, files_deleted, files_skipped, files_errored, files_extracted, files_zipped,
+       status, error_message, triggered_by_run_id, job_id, job_name_snapshot)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       params.mappingId,
       params.mappingNameSnapshot,
@@ -260,6 +266,8 @@ export function recordRun(
       params.result.filesDeleted,
       params.result.filesSkipped,
       params.result.filesErrored,
+      params.result.filesExtracted,
+      params.result.filesZipped,
       params.status,
       params.errorMessage ?? null,
       params.triggeredByRunId ?? null,
@@ -491,6 +499,8 @@ export function getJobStats(db: Database, jobId: number): RunStats {
       filesDeleted: chain.reduce((sum, r) => sum + r.filesDeleted, 0),
       filesSkipped: chain.reduce((sum, r) => sum + r.filesSkipped, 0),
       filesErrored: chain.reduce((sum, r) => sum + r.filesErrored, 0),
+      filesExtracted: chain.reduce((sum, r) => sum + r.filesExtracted, 0),
+      filesZipped: chain.reduce((sum, r) => sum + r.filesZipped, 0),
     },
   };
 }

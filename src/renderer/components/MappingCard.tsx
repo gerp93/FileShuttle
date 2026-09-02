@@ -21,9 +21,14 @@ function relativeTime(iso: string): string {
   return when.toISOString().slice(0, 10);
 }
 
-function accomplished(run: { filesMoved: number; filesCopied: number; filesDeleted: number }, actionType: string): number {
+function accomplished(
+  run: { filesMoved: number; filesCopied: number; filesDeleted: number; filesExtracted: number; filesZipped: number },
+  actionType: string
+): number {
   if (actionType === 'copy') return run.filesCopied;
   if (actionType === 'delete') return run.filesDeleted;
+  if (actionType === 'zip') return run.filesZipped;
+  if (actionType === 'unzip') return run.filesExtracted;
   return run.filesMoved;
 }
 
@@ -45,7 +50,16 @@ export default function MappingCard({ record, onChanged }: Props) {
 
   const statsLine = () => {
     if (!stats) return '';
-    const label = record.actionType === 'copy' ? 'copied' : record.actionType === 'delete' ? 'deleted' : 'moved';
+    const label =
+      record.actionType === 'copy'
+        ? 'copied'
+        : record.actionType === 'delete'
+        ? 'deleted'
+        : record.actionType === 'zip'
+        ? 'zipped'
+        : record.actionType === 'unzip'
+        ? 'extracted'
+        : 'moved';
     if (!stats.lastRun) return `Never run   ·   ${stats.runCount} run${stats.runCount !== 1 ? 's' : ''} total`;
     const last = stats.lastRun;
     const count = accomplished(last, record.actionType);
@@ -112,7 +126,7 @@ export default function MappingCard({ record, onChanged }: Props) {
         ) : (
           <span className="badge">All files</span>
         )}
-        {record.keepNewest != null && record.actionType !== 'copy' && (
+        {record.keepNewest != null && record.actionType !== 'copy' && record.actionType !== 'zip' && (
           <span className="badge">Keep newest {record.keepNewest}</span>
         )}
       </div>

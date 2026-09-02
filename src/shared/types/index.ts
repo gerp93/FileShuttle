@@ -18,10 +18,10 @@ export type ConflictPolicy = (typeof CONFLICT_POLICIES)[number];
 export const FILTER_MATCH_MODES = ['all', 'any'] as const;
 export type FilterMatchMode = (typeof FILTER_MATCH_MODES)[number];
 
-export const ACTION_TYPES = ['move', 'copy', 'delete'] as const;
+export const ACTION_TYPES = ['move', 'copy', 'delete', 'zip', 'unzip'] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
-export const SCHEDULE_TYPES = ['manual', 'interval', 'daily_at'] as const;
+export const SCHEDULE_TYPES = ['manual', 'interval', 'daily_at', 'watch'] as const;
 export type ScheduleType = (typeof SCHEDULE_TYPES)[number];
 
 export interface FilterRule {
@@ -46,7 +46,7 @@ export interface MappingConfig {
 export interface FileOutcome {
   sourcePath: string;
   destPath: string | null;
-  outcome: 'moved' | 'copied' | 'deleted' | 'skipped' | 'error';
+  outcome: 'moved' | 'copied' | 'deleted' | 'skipped' | 'error' | 'extracted' | 'zipped';
   reason: string | null;
   sizeBytes: number | null;
 }
@@ -60,6 +60,8 @@ export interface RunResult {
   filesDeleted: number;
   filesSkipped: number;
   filesErrored: number;
+  filesExtracted: number;
+  filesZipped: number;
 }
 
 export interface MappingRecord {
@@ -109,11 +111,14 @@ export type RunCounts = {
   filesDeleted: number;
   filesSkipped: number;
   filesErrored: number;
+  filesExtracted: number;
+  filesZipped: number;
 };
 
 /** Success with skipped files is not a failure — it's complete, with a caveat. */
 export function computeRunStatus(counts: RunCounts): RunStatus {
-  const accomplished = counts.filesMoved + counts.filesCopied + counts.filesDeleted;
+  const accomplished =
+    counts.filesMoved + counts.filesCopied + counts.filesDeleted + counts.filesExtracted + counts.filesZipped;
   if (counts.filesErrored && !accomplished) return 'error';
   if (counts.filesErrored) return 'partial';
   if (counts.filesSkipped) return 'with_skips';
@@ -170,6 +175,8 @@ export interface RunSummary {
   filesDeleted: number;
   filesSkipped: number;
   filesErrored: number;
+  filesExtracted: number;
+  filesZipped: number;
   status: RunStatus;
   errorMessage: string | null;
   undoneByRunId: number | null;

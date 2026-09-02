@@ -6,6 +6,7 @@ const SCHEDULE_TYPES = [
   ['manual', 'Manual only'],
   ['interval', 'Every N minutes'],
   ['daily_at', 'Daily at a specific time'],
+  ['watch', 'Watch folder for new files'],
 ] as const;
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -18,7 +19,7 @@ export default function JobEditor() {
 
   const [name, setName] = useState('');
   const [enabled, setEnabled] = useState(true);
-  const [scheduleType, setScheduleType] = useState<'manual' | 'interval' | 'daily_at'>('manual');
+  const [scheduleType, setScheduleType] = useState<'manual' | 'interval' | 'daily_at' | 'watch'>('manual');
   const [intervalMinutes, setIntervalMinutes] = useState('30');
   const [dailyTime, setDailyTime] = useState('09:00');
   const [mappingIds, setMappingIds] = useState<number[]>([]);
@@ -147,6 +148,14 @@ export default function JobEditor() {
           Time (HH:MM, 24-hour)
           <input type="text" value={dailyTime} onChange={(e) => setDailyTime(e.target.value)} />
         </label>
+      )}
+
+      {scheduleType === 'watch' && (
+        <p className="muted" style={{ marginBottom: 12 }}>
+          Runs the moment a new file or folder shows up in the source folder of the first
+          mapping below (the OS notifies FileShuttle directly — there is no polling, so this
+          has effectively no ongoing performance cost). Only fires while FileShuttle is running.
+        </p>
       )}
 
       <hr className="divider" />

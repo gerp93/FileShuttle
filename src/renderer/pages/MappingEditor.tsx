@@ -7,6 +7,8 @@ const ACTION_TYPES = [
   ['move', 'Move to destination folder'],
   ['copy', 'Copy to destination folder'],
   ['delete', 'Delete (move to Recycle Bin)'],
+  ['zip', 'Zip into destination folder'],
+  ['unzip', 'Unzip .zip files into destination folder'],
 ] as const;
 
 const CONFLICT_POLICIES = [
@@ -24,7 +26,7 @@ export default function MappingEditor() {
   const [name, setName] = useState('');
   const [sourcePath, setSourcePath] = useState('');
   const [destPath, setDestPath] = useState('');
-  const [actionType, setActionType] = useState<'move' | 'copy' | 'delete'>('move');
+  const [actionType, setActionType] = useState<'move' | 'copy' | 'delete' | 'zip' | 'unzip'>('move');
   const [recursive, setRecursive] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [conflictPolicy, setConflictPolicy] = useState<'skip' | 'overwrite' | 'auto_rename'>('skip');
@@ -70,7 +72,7 @@ export default function MappingEditor() {
     }
 
     let keepNewest: number | null = null;
-    if (actionType !== 'copy' && keepNewestEnabled) {
+    if (actionType !== 'copy' && actionType !== 'zip' && keepNewestEnabled) {
       if (!/^\d+$/.test(keepNewestCount.trim()) || parseInt(keepNewestCount.trim(), 10) < 1) {
         setError('Keep newest must be a whole number of at least 1.');
         return null;
@@ -172,6 +174,22 @@ export default function MappingEditor() {
         </p>
       )}
 
+      {actionType === 'unzip' && (
+        <p className="muted">
+          Matching .zip files are extracted into a same-named subfolder of the destination
+          folder, then the original zip is moved to the Recycle Bin. Add an extension filter
+          for &quot;zip&quot; below so only zip files are picked up.
+        </p>
+      )}
+
+      {actionType === 'zip' && (
+        <p className="muted">
+          Each file or folder directly inside the source folder is compressed into its own
+          .zip file in the destination folder. Originals are left in place, and each folder&apos;s
+          full contents are always included.
+        </p>
+      )}
+
       {actionType !== 'delete' && (
         <div className="field-row" style={{ marginBottom: 12 }}>
           <label className="field grow">
@@ -182,14 +200,20 @@ export default function MappingEditor() {
         </div>
       )}
 
-      <div className="switch-row" style={{ marginBottom: 8 }}>
-        <input type="checkbox" id="recursive" checked={recursive} onChange={(e) => setRecursive(e.target.checked)} />
-        <label htmlFor="recursive">Include subfolders (recursive)</label>
-      </div>
+      {actionType !== 'zip' && (
+        <div className="switch-row" style={{ marginBottom: 8 }}>
+          <input type="checkbox" id="recursive" checked={recursive} onChange={(e) => setRecursive(e.target.checked)} />
+          <label htmlFor="recursive">Include subfolders (recursive)</label>
+        </div>
+      )}
 
       {actionType !== 'delete' && (
         <label className="field" style={{ marginBottom: 12 }}>
-          If a file already exists at the destination
+          {actionType === 'zip'
+            ? 'If a zip file already exists at the destination'
+            : actionType === 'unzip'
+            ? 'If a folder already exists at the destination'
+            : 'If a file already exists at the destination'}
           <select value={conflictPolicy} onChange={(e) => setConflictPolicy(e.target.value as typeof conflictPolicy)}>
             {CONFLICT_POLICIES.map(([k, v]) => (
               <option key={k} value={k}>{v}</option>
@@ -229,7 +253,7 @@ export default function MappingEditor() {
         />
       ))}
 
-      {actionType !== 'copy' && (
+      {actionType !== 'copy' && actionType !== 'zip' && (
         <div style={{ marginTop: 8, marginBottom: 12 }}>
           <div className="switch-row" style={{ marginBottom: 8 }}>
             <input
@@ -253,8 +277,8 @@ export default function MappingEditor() {
           )}
           <p className="muted" style={{ margin: '8px 0 0' }}>
             After filters match, files are ranked by last modified time. The newest N stay;
-            the rest are {actionType === 'delete' ? 'deleted' : 'moved'}. Pair this with a copy/move
-            mapping in the same job to prune a backup folder.
+            the rest are {actionType === 'delete' ? 'deleted' : actionType === 'unzip' ? 'unzipped' : 'moved'}.
+            Pair this with a copy/move mapping in the same job to prune a backup folder.
           </p>
         </div>
       )}
