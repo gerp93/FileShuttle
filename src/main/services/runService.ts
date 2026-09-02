@@ -63,6 +63,8 @@ function aggregateResults(results: RunResult[]): RunResult {
       filesDeleted: 0,
       filesSkipped: 0,
       filesErrored: 0,
+      filesExtracted: 0,
+      filesZipped: 0,
     };
   }
   return {
@@ -74,6 +76,8 @@ function aggregateResults(results: RunResult[]): RunResult {
     filesDeleted: results.reduce((sum, r) => sum + r.filesDeleted, 0),
     filesSkipped: results.reduce((sum, r) => sum + r.filesSkipped, 0),
     filesErrored: results.reduce((sum, r) => sum + r.filesErrored, 0),
+    filesExtracted: results.reduce((sum, r) => sum + r.filesExtracted, 0),
+    filesZipped: results.reduce((sum, r) => sum + r.filesZipped, 0),
   };
 }
 

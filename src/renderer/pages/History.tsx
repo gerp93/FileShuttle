@@ -11,7 +11,10 @@ import {
   RunSummary,
 } from '../../shared/types';
 
-type Counts = Pick<RunSummary, 'filesMoved' | 'filesCopied' | 'filesDeleted' | 'filesSkipped' | 'filesErrored'>;
+type Counts = Pick<
+  RunSummary,
+  'filesMoved' | 'filesCopied' | 'filesDeleted' | 'filesSkipped' | 'filesErrored' | 'filesExtracted' | 'filesZipped'
+>;
 
 interface JobHistoryGroup {
   kind: 'job';
@@ -33,7 +36,7 @@ interface StandaloneHistoryEntry {
 type HistoryEntry = JobHistoryGroup | StandaloneHistoryEntry;
 
 function runMovedFiles(run: Counts): boolean {
-  return run.filesMoved + run.filesCopied + run.filesDeleted > 0;
+  return run.filesMoved + run.filesCopied + run.filesDeleted + run.filesExtracted + run.filesZipped > 0;
 }
 
 function reasonLabel(reason: string | null): string | null {
@@ -45,9 +48,13 @@ function reasonLabel(reason: string | null): string | null {
 function actionSummary(run: Counts, actionType: string | null): string {
   if (actionType === 'copy') return `copied ${run.filesCopied}`;
   if (actionType === 'delete') return `deleted ${run.filesDeleted}`;
+  if (actionType === 'zip') return `zipped ${run.filesZipped}`;
+  if (actionType === 'unzip') return `extracted ${run.filesExtracted}`;
   if (actionType === 'move') return `moved ${run.filesMoved}`;
   if (run.filesDeleted) return `deleted ${run.filesDeleted}`;
   if (run.filesCopied) return `copied ${run.filesCopied}`;
+  if (run.filesZipped) return `zipped ${run.filesZipped}`;
+  if (run.filesExtracted) return `extracted ${run.filesExtracted}`;
   return `moved ${run.filesMoved}`;
 }
 
@@ -61,6 +68,8 @@ function totalsSummary(run: Counts): string {
   if (run.filesMoved) parts.push(`moved ${run.filesMoved}`);
   if (run.filesCopied) parts.push(`copied ${run.filesCopied}`);
   if (run.filesDeleted) parts.push(`deleted ${run.filesDeleted}`);
+  if (run.filesZipped) parts.push(`zipped ${run.filesZipped}`);
+  if (run.filesExtracted) parts.push(`extracted ${run.filesExtracted}`);
   if (!parts.length) parts.push('moved 0');
   return `${parts.join(', ')} / skipped ${run.filesSkipped} / errored ${run.filesErrored}`;
 }
@@ -76,6 +85,8 @@ function sumCounts(runs: RunSummary[]): Counts {
     filesDeleted: runs.reduce((sum, run) => sum + run.filesDeleted, 0),
     filesSkipped: runs.reduce((sum, run) => sum + run.filesSkipped, 0),
     filesErrored: runs.reduce((sum, run) => sum + run.filesErrored, 0),
+    filesExtracted: runs.reduce((sum, run) => sum + run.filesExtracted, 0),
+    filesZipped: runs.reduce((sum, run) => sum + run.filesZipped, 0),
   };
 }
 

@@ -18,13 +18,22 @@ come from there rather than being reinvented locally.
 
 - **Mappings** — any number of source/destination folder pairs, each
   independently configured.
+- **Actions** — move, copy, delete (Recycle Bin), zip, or unzip.
+  Zip compresses each file or folder found directly in the source folder
+  into its own `.zip` in the destination, leaving originals in place.
+  Unzip extracts matching `.zip` files into a same-named subfolder of the
+  destination, then sends the original zip to the Recycle Bin.
 - **Filters** — 0 to N rules per mapping (extension, wildcard/regex
   filename, size, modified/created date), combined as either AND
   ("match ALL filters") or OR ("match ANY filter").
 - **Conflict handling** — overwrite, skip, or auto-rename on a filename
   collision at the destination.
-- **Scheduling** — manual only, every N minutes, or daily at a specific
-  time, all running in-app (no OS task scheduler required).
+- **Scheduling** — manual only, every N minutes, daily at a specific
+  time, or watch a folder for new files, all running in-app (no OS task
+  scheduler required). Watch mode reacts to OS filesystem notifications
+  (inotify/FSEvents/ReadDirectoryChangesW) rather than polling, so it has
+  no meaningful ongoing performance cost — handy for auto-unzipping
+  incoming files the moment they land.
 - **Run history** — per-run counts and per-file detail (moved/skipped/
   errored) for every mapping.
 - **Background/tray mode** — closing the window keeps FileShuttle running

@@ -14,7 +14,7 @@ const STATEMENTS = [
     dest_path                   TEXT NOT NULL,
     recursive                   INTEGER NOT NULL DEFAULT 0,
     action_type                 TEXT NOT NULL DEFAULT 'move'
-                                 CHECK (action_type IN ('move','copy','delete')),
+                                 CHECK (action_type IN ('move','copy','delete','zip','unzip')),
     conflict_policy             TEXT NOT NULL DEFAULT 'skip'
                                  CHECK (conflict_policy IN ('overwrite','skip','auto_rename')),
     filter_match_mode           TEXT NOT NULL DEFAULT 'all'
@@ -22,7 +22,7 @@ const STATEMENTS = [
     keep_newest                 INTEGER,
     enabled                     INTEGER NOT NULL DEFAULT 1,
     schedule_type               TEXT NOT NULL DEFAULT 'manual'
-                                 CHECK (schedule_type IN ('manual','interval','daily_at')),
+                                 CHECK (schedule_type IN ('manual','interval','daily_at','watch')),
     schedule_interval_minutes   INTEGER,
     schedule_daily_time         TEXT,
     next_mapping_id             INTEGER REFERENCES mappings(id) ON DELETE SET NULL,
@@ -50,6 +50,8 @@ const STATEMENTS = [
     files_deleted          INTEGER NOT NULL DEFAULT 0,
     files_skipped          INTEGER NOT NULL DEFAULT 0,
     files_errored          INTEGER NOT NULL DEFAULT 0,
+    files_extracted        INTEGER NOT NULL DEFAULT 0,
+    files_zipped           INTEGER NOT NULL DEFAULT 0,
     status                 TEXT NOT NULL CHECK (status IN ('success','with_skips','partial','error')),
     error_message          TEXT,
     undone_by_run_id       INTEGER REFERENCES run_history(id) ON DELETE SET NULL,
@@ -60,7 +62,7 @@ const STATEMENTS = [
     run_id          INTEGER NOT NULL REFERENCES run_history(id) ON DELETE CASCADE,
     source_path     TEXT NOT NULL,
     dest_path       TEXT,
-    outcome         TEXT NOT NULL CHECK (outcome IN ('moved','copied','deleted','skipped','error')),
+    outcome         TEXT NOT NULL CHECK (outcome IN ('moved','copied','deleted','skipped','error','extracted','zipped')),
     reason          TEXT,
     file_size_bytes INTEGER
   )`,
@@ -73,7 +75,7 @@ const STATEMENTS = [
     name                        TEXT NOT NULL,
     enabled                     INTEGER NOT NULL DEFAULT 1,
     schedule_type               TEXT NOT NULL DEFAULT 'manual'
-                                 CHECK (schedule_type IN ('manual','interval','daily_at')),
+                                 CHECK (schedule_type IN ('manual','interval','daily_at','watch')),
     schedule_interval_minutes   INTEGER,
     schedule_daily_time         TEXT,
     created_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -242,6 +244,100 @@ function widenMappingsActionTypeCheck(db: Database): void {
   db.run('PRAGMA foreign_keys = ON');
 }
 
+function widenRunHistoryFilesOutcomeCheckForZip(db: Database): void {
+  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_history_files'");
+  if (!rows.length || !rows[0].values.length) return;
+  const sql = String(rows[0].values[0][0] ?? '');
+  if (sql.includes("'extracted'")) return;
+
+  db.run('ALTER TABLE run_history_files RENAME TO run_history_files_old');
+  db.run(`CREATE TABLE run_history_files (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          INTEGER NOT NULL REFERENCES run_history(id) ON DELETE CASCADE,
+    source_path     TEXT NOT NULL,
+    dest_path       TEXT,
+    outcome         TEXT NOT NULL CHECK (outcome IN ('moved','copied','deleted','skipped','error','extracted','zipped')),
+    reason          TEXT,
+    file_size_bytes INTEGER
+  )`);
+  db.run(
+    'INSERT INTO run_history_files (id, run_id, source_path, dest_path, outcome, reason, file_size_bytes) ' +
+      'SELECT id, run_id, source_path, dest_path, outcome, reason, file_size_bytes FROM run_history_files_old'
+  );
+  db.run('DROP TABLE run_history_files_old');
+}
+
+function widenMappingsActionTypeCheckForZip(db: Database): void {
+  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='mappings'");
+  if (!rows.length || !rows[0].values.length) return;
+  const sql = String(rows[0].values[0][0] ?? '');
+  if (sql.includes("'zip'")) return;
+
+  db.run('PRAGMA foreign_keys = OFF');
+  db.run(`CREATE TABLE mappings_new (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                        TEXT NOT NULL,
+    source_path                 TEXT NOT NULL,
+    dest_path                   TEXT NOT NULL,
+    recursive                   INTEGER NOT NULL DEFAULT 0,
+    action_type                 TEXT NOT NULL DEFAULT 'move'
+                                 CHECK (action_type IN ('move','copy','delete','zip','unzip')),
+    conflict_policy             TEXT NOT NULL DEFAULT 'skip'
+                                 CHECK (conflict_policy IN ('overwrite','skip','auto_rename')),
+    filter_match_mode           TEXT NOT NULL DEFAULT 'all'
+                                 CHECK (filter_match_mode IN ('all','any')),
+    keep_newest                 INTEGER,
+    enabled                     INTEGER NOT NULL DEFAULT 1,
+    schedule_type               TEXT NOT NULL DEFAULT 'manual'
+                                 CHECK (schedule_type IN ('manual','interval','daily_at','watch')),
+    schedule_interval_minutes   INTEGER,
+    schedule_daily_time         TEXT,
+    next_mapping_id             INTEGER REFERENCES mappings_new(id) ON DELETE SET NULL,
+    created_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`);
+  db.run(`INSERT INTO mappings_new
+    (id, name, source_path, dest_path, recursive, action_type, conflict_policy,
+     filter_match_mode, keep_newest, enabled, schedule_type, schedule_interval_minutes,
+     schedule_daily_time, next_mapping_id, created_at, updated_at)
+    SELECT
+      id, name, source_path, dest_path, recursive, action_type, conflict_policy,
+      filter_match_mode, keep_newest, enabled, schedule_type, schedule_interval_minutes,
+      schedule_daily_time, next_mapping_id, created_at, updated_at
+    FROM mappings`);
+  db.run('DROP TABLE mappings');
+  db.run('ALTER TABLE mappings_new RENAME TO mappings');
+  db.run('PRAGMA foreign_keys = ON');
+}
+
+function widenJobsScheduleTypeCheckForWatch(db: Database): void {
+  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'");
+  if (!rows.length || !rows[0].values.length) return;
+  const sql = String(rows[0].values[0][0] ?? '');
+  if (sql.includes("'watch'")) return;
+
+  db.run('PRAGMA foreign_keys = OFF');
+  db.run(`CREATE TABLE jobs_new (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                        TEXT NOT NULL,
+    enabled                     INTEGER NOT NULL DEFAULT 1,
+    schedule_type               TEXT NOT NULL DEFAULT 'manual'
+                                 CHECK (schedule_type IN ('manual','interval','daily_at','watch')),
+    schedule_interval_minutes   INTEGER,
+    schedule_daily_time         TEXT,
+    created_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`);
+  db.run(`INSERT INTO jobs_new
+    (id, name, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time, created_at, updated_at)
+    SELECT
+      id, name, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time, created_at, updated_at
+    FROM jobs`);
+  db.run('DROP TABLE jobs');
+  db.run('ALTER TABLE jobs_new RENAME TO jobs');
+  db.run('PRAGMA foreign_keys = ON');
+}
+
 function initSchema(db: Database): void {
   db.run('PRAGMA foreign_keys = ON');
   for (const statement of STATEMENTS) {
@@ -274,6 +370,11 @@ function initSchema(db: Database): void {
   addColumnIfMissing(db, 'run_history', 'job_name_snapshot', 'job_name_snapshot TEXT');
   widenRunHistoryForSystemEvents(db);
   widenRunHistoryStatusCheck(db);
+  addColumnIfMissing(db, 'run_history', 'files_extracted', 'files_extracted INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'run_history', 'files_zipped', 'files_zipped INTEGER NOT NULL DEFAULT 0');
+  widenRunHistoryFilesOutcomeCheckForZip(db);
+  widenMappingsActionTypeCheckForZip(db);
+  widenJobsScheduleTypeCheckForWatch(db);
 }
 
 export async function initDatabase(dbPath?: string): Promise<Database> {

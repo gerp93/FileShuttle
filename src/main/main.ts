@@ -15,6 +15,7 @@ import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runSe
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
 import { SchedulerService } from './scheduler/scheduler';
+import { WatcherService } from './scheduler/watcher';
 import {
   CreateJobInput,
   CreateMappingInput,
@@ -33,6 +34,7 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let db: Database | null = null;
 let scheduler: SchedulerService | null = null;
+let watcher: WatcherService | null = null;
 let retention: RetentionService | null = null;
 let announcedBackground = false;
 let isQuitting = false;
@@ -102,6 +104,18 @@ function showTrayNotification(title: string, body: string): void {
   }
 }
 
+function summarizeResult(result: RunResult): string {
+  const parts: string[] = [];
+  if (result.filesMoved) parts.push(`moved ${result.filesMoved}`);
+  if (result.filesCopied) parts.push(`copied ${result.filesCopied}`);
+  if (result.filesDeleted) parts.push(`deleted ${result.filesDeleted}`);
+  if (result.filesZipped) parts.push(`zipped ${result.filesZipped}`);
+  if (result.filesExtracted) parts.push(`extracted ${result.filesExtracted}`);
+  if (result.filesSkipped) parts.push(`skipped ${result.filesSkipped}`);
+  if (result.filesErrored) parts.push(`errored ${result.filesErrored}`);
+  return parts.length ? parts.join(', ') : 'no matching files';
+}
+
 function createTray(): void {
   const iconPath = path.join(__dirname, '../../../assets/icon.png');
   tray = new Tray(nativeImage.createFromPath(iconPath));
@@ -115,6 +129,7 @@ function createTray(): void {
         click: () => {
           isQuitting = true;
           scheduler?.shutdown();
+          watcher?.shutdown();
           retention?.shutdown();
           app.quit();
         },
@@ -205,6 +220,7 @@ function registerIPCHandlers(): void {
     const id = repo.createMapping(db!, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
+    watcher?.reloadJobs();
     return id;
   });
 
@@ -212,12 +228,14 @@ function registerIPCHandlers(): void {
     repo.updateMapping(db!, id, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
+    watcher?.reloadJobs();
   });
 
   ipcMain.handle('mappings:delete', (_, id: number) => {
     repo.deleteMapping(db!, id);
     saveDatabase(db!);
     scheduler?.reloadJobs();
+    watcher?.reloadJobs();
   });
 
   ipcMain.handle('mappings:listJobsUsing', (_, id: number) => repo.listJobsUsingMapping(db!, id));
@@ -226,6 +244,7 @@ function registerIPCHandlers(): void {
     repo.setMappingEnabled(db!, id, enabled);
     saveDatabase(db!);
     scheduler?.reloadJobs();
+    watcher?.reloadJobs();
   });
 
   ipcMain.handle('mappings:getStats', (_, id: number) => repo.getRunStats(db!, id));
@@ -238,6 +257,7 @@ function registerIPCHandlers(): void {
     const id = repo.createJob(db!, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
+    watcher?.reloadJobs();
     return id;
   });
 
@@ -245,18 +265,21 @@ function registerIPCHandlers(): void {
     repo.updateJob(db!, id, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
+    watcher?.reloadJobs();
   });
 
   ipcMain.handle('jobs:delete', (_, id: number) => {
     repo.deleteJob(db!, id);
     saveDatabase(db!);
     scheduler?.reloadJobs();
+    watcher?.reloadJobs();
   });
 
   ipcMain.handle('jobs:setEnabled', (_, id: number, enabled: boolean) => {
     repo.setJobEnabled(db!, id, enabled);
     saveDatabase(db!);
     scheduler?.reloadJobs();
+    watcher?.reloadJobs();
   });
 
   ipcMain.handle('jobs:getStats', (_, id: number) => repo.getJobStats(db!, id));
@@ -376,16 +399,20 @@ app.whenReady().then(async () => {
   scheduler = new SchedulerService(db, (jobId, result) => {
     const job = repo.getJob(db!, jobId);
     const jobName = job?.name ?? `job #${jobId}`;
-    showTrayNotification(
-      'FileShuttle: scheduled run finished',
-      `"${jobName}" — moved ${result.filesMoved}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`
-    );
+    showTrayNotification('FileShuttle: scheduled run finished', `"${jobName}" — ${summarizeResult(result)}`);
+  });
+
+  watcher = new WatcherService(db, (jobId, result) => {
+    const job = repo.getJob(db!, jobId);
+    const jobName = job?.name ?? `job #${jobId}`;
+    showTrayNotification('FileShuttle: watched folder run finished', `"${jobName}" — ${summarizeResult(result)}`);
   });
 
   registerIPCHandlers();
   createWindow(startHidden);
   createTray();
   scheduler.start();
+  watcher.start();
   setupAutoUpdater();
 
   app.on('activate', () => {
@@ -400,6 +427,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   isQuitting = true;
   scheduler?.shutdown();
+  watcher?.shutdown();
   retention?.shutdown();
   if (db) saveDatabase(db);
 });

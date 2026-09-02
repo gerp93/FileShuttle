@@ -5,6 +5,7 @@ import { JobRecord, RunStats } from '../../shared/types';
 function scheduleSummary(record: JobRecord): string {
   if (record.scheduleType === 'interval') return `Every ${record.scheduleIntervalMinutes} min`;
   if (record.scheduleType === 'daily_at') return `Daily at ${record.scheduleDailyTime}`;
+  if (record.scheduleType === 'watch') return 'Watching for new files';
   return 'Manual only';
 }
 
@@ -42,7 +43,7 @@ export default function JobCard({ record, onChanged }: Props) {
     if (!stats.lastRun) return `Never run   ·   ${stats.runCount} run${stats.runCount !== 1 ? 's' : ''} total`;
     const last = stats.lastRun;
     const runLabel = `${stats.runCount} run${stats.runCount !== 1 ? 's' : ''} total`;
-    return `Last run ${relativeTime(last.startedAt)} — moved ${last.filesMoved}, copied ${last.filesCopied}, deleted ${last.filesDeleted}, skipped ${last.filesSkipped}, errored ${last.filesErrored}   ·   ${runLabel}`;
+    return `Last run ${relativeTime(last.startedAt)} — moved ${last.filesMoved}, copied ${last.filesCopied}, deleted ${last.filesDeleted}, zipped ${last.filesZipped}, extracted ${last.filesExtracted}, skipped ${last.filesSkipped}, errored ${last.filesErrored}   ·   ${runLabel}`;
   };
 
   const runNow = async () => {
@@ -50,7 +51,7 @@ export default function JobCard({ record, onChanged }: Props) {
     try {
       const result = await window.fileshuttleAPI.jobs.run(record.id);
       setStatus(
-        `Moved ${result.filesMoved}, copied ${result.filesCopied}, deleted ${result.filesDeleted}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`
+        `Moved ${result.filesMoved}, copied ${result.filesCopied}, deleted ${result.filesDeleted}, zipped ${result.filesZipped}, extracted ${result.filesExtracted}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`
       );
       setStats(await window.fileshuttleAPI.jobs.getStats(record.id));
     } catch (err) {
@@ -85,8 +86,7 @@ export default function JobCard({ record, onChanged }: Props) {
         ) : (
           record.steps.map((step, i) => (
             <div key={`${step.id}-${i}`}>
-              {i + 1}. {step.name}
-              {step.actionType === 'delete' ? ' — delete' : step.actionType === 'copy' ? ' — copy' : ' — move'}
+              {i + 1}. {step.name} — {step.actionType}
             </div>
           ))
         )}
