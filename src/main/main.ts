@@ -238,6 +238,14 @@ function registerIPCHandlers(): void {
     watcher?.reloadJobs();
   });
 
+  ipcMain.handle('mappings:clone', (_, id: number, name: string) => {
+    const newId = repo.cloneMapping(db!, id, name);
+    saveDatabase(db!);
+    scheduler?.reloadJobs();
+    watcher?.reloadJobs();
+    return newId;
+  });
+
   ipcMain.handle('mappings:listJobsUsing', (_, id: number) => repo.listJobsUsingMapping(db!, id));
 
   ipcMain.handle('mappings:setEnabled', (_, id: number, enabled: boolean) => {

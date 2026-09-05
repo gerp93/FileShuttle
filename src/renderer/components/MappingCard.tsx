@@ -43,6 +43,9 @@ export default function MappingCard({ record, onChanged }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blockedJobs, setBlockedJobs] = useState<string[] | null>(null);
   const [deleteError, setDeleteError] = useState('');
+  const [showClone, setShowClone] = useState(false);
+  const [cloneName, setCloneName] = useState('');
+  const [cloneError, setCloneError] = useState('');
 
   useEffect(() => {
     void window.fileshuttleAPI.mappings.getStats(record.id).then(setStats);
@@ -93,6 +96,27 @@ export default function MappingCard({ record, onChanged }: Props) {
     }
   };
 
+  const openClone = () => {
+    setCloneName(`${record.name} (copy)`);
+    setCloneError('');
+    setShowClone(true);
+  };
+
+  const doClone = async () => {
+    const name = cloneName.trim();
+    if (!name) {
+      setCloneError('Name is required.');
+      return;
+    }
+    try {
+      await window.fileshuttleAPI.mappings.clone(record.id, name);
+      setShowClone(false);
+      onChanged();
+    } catch (err) {
+      setCloneError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const pathParts = (p: string) => p.replace(/\\/g, '/').split('/').filter(Boolean);
 
   return (
@@ -135,8 +159,32 @@ export default function MappingCard({ record, onChanged }: Props) {
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
         <button className="text" onClick={() => navigate(`/editor/${record.id}`)}>Edit</button>
+        <button className="text" onClick={openClone}>Clone</button>
         <button className="text danger" onClick={() => void requestDelete()}>Delete</button>
       </div>
+
+      {showClone && (
+        <div className="dialog-overlay">
+          <div className="dialog">
+            <h3>Clone mapping</h3>
+            <p className="muted">Creates a copy of &quot;{record.name}&quot; with a new name. The copy is not added to any job.</p>
+            <label className="field">
+              Name
+              <input
+                type="text"
+                value={cloneName}
+                onChange={(e) => setCloneName(e.target.value)}
+                autoFocus
+              />
+            </label>
+            {cloneError && <p style={{ color: 'var(--color-accent-red)' }}>{cloneError}</p>}
+            <div className="dialog-actions">
+              <button className="outline" onClick={() => setShowClone(false)}>Cancel</button>
+              <button className="primary" onClick={() => void doClone()}>Clone</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmDelete && (
         <div className="dialog-overlay">
