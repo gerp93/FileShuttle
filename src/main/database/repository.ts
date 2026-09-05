@@ -141,6 +141,29 @@ export function updateMapping(db: Database, mappingId: number, input: UpdateMapp
   replaceFilterRules(db, mappingId, input.filters);
 }
 
+export function cloneMapping(db: Database, mappingId: number, newName: string): number {
+  const source = getMapping(db, mappingId);
+  if (!source) {
+    throw new Error(`Mapping #${mappingId} not found`);
+  }
+  return createMapping(db, {
+    name: newName,
+    sourcePath: source.sourcePath,
+    destPath: source.destPath,
+    recursive: source.recursive,
+    conflictPolicy: source.conflictPolicy,
+    enabled: source.enabled,
+    scheduleType: source.scheduleType,
+    scheduleIntervalMinutes: source.scheduleIntervalMinutes,
+    scheduleDailyTime: source.scheduleDailyTime,
+    filters: source.filters,
+    filterMatchMode: source.filterMatchMode,
+    nextMappingId: source.nextMappingId,
+    actionType: source.actionType,
+    keepNewest: source.keepNewest,
+  });
+}
+
 export function listJobsUsingMapping(db: Database, mappingId: number): { id: number; name: string }[] {
   return queryAll(
     db,

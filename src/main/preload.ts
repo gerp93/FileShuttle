@@ -26,6 +26,7 @@ export interface FileShuttleAPI {
     create: (input: CreateMappingInput) => Promise<number>;
     update: (id: number, input: UpdateMappingInput) => Promise<void>;
     delete: (id: number) => Promise<void>;
+    clone: (id: number, name: string) => Promise<number>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
     listJobsUsing: (id: number) => Promise<JobRef[]>;
@@ -83,6 +84,7 @@ const api: FileShuttleAPI = {
     create: (input) => ipcRenderer.invoke('mappings:create', input),
     update: (id, input) => ipcRenderer.invoke('mappings:update', id, input),
     delete: (id) => ipcRenderer.invoke('mappings:delete', id),
+    clone: (id, name) => ipcRenderer.invoke('mappings:clone', id, name),
     setEnabled: (id, enabled) => ipcRenderer.invoke('mappings:setEnabled', id, enabled),
     getStats: (id) => ipcRenderer.invoke('mappings:getStats', id),
     listJobsUsing: (id) => ipcRenderer.invoke('mappings:listJobsUsing', id),

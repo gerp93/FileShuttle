@@ -27,6 +27,7 @@ interface FileShuttleAPI {
     create: (input: CreateMappingInput) => Promise<number>;
     update: (id: number, input: UpdateMappingInput) => Promise<void>;
     delete: (id: number) => Promise<void>;
+    clone: (id: number, name: string) => Promise<number>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
     listJobsUsing: (id: number) => Promise<JobRef[]>;
