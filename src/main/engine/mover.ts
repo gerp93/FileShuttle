@@ -260,6 +260,24 @@ function firstFreeDir(dirPath: string): string {
   }
 }
 
+/**
+ * fs.renameSync fails with EXDEV when source and destination are on different
+ * drives/volumes (common here: moving into a different drive letter, a mapped
+ * network drive, etc.) -- the OS can't do an in-place rename across devices.
+ * Fall back to copy-then-delete in that case, same as `mv` does.
+ */
+function renameOrCopyAcrossDevices(src: string, dest: string): void {
+  try {
+    fs.renameSync(src, dest);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
+    const stat = fs.statSync(src);
+    fs.copyFileSync(src, dest);
+    fs.utimesSync(dest, stat.atime, stat.mtime);
+    fs.rmSync(src);
+  }
+}
+
 function moveOrCopy(
   filePath: string,
   destPath: string,
@@ -275,7 +293,7 @@ function moveOrCopy(
       fs.utimesSync(destPath, fs.statSync(filePath).atime, fs.statSync(filePath).mtime);
       outcomes.push({ sourcePath: filePath, destPath, outcome: 'copied', reason, sizeBytes: size });
     } else {
-      fs.renameSync(filePath, destPath);
+      renameOrCopyAcrossDevices(filePath, destPath);
       outcomes.push({ sourcePath: filePath, destPath, outcome: 'moved', reason, sizeBytes: size });
     }
   } catch (err) {
@@ -315,7 +333,7 @@ export function undoRun(fileOutcomes: FileOutcome[]): RunResult {
     try {
       fs.mkdirSync(path.dirname(original.sourcePath), { recursive: true });
       const size = fs.statSync(original.destPath).size;
-      fs.renameSync(original.destPath, original.sourcePath);
+      renameOrCopyAcrossDevices(original.destPath, original.sourcePath);
       outcomes.push({
         sourcePath: original.destPath,
         destPath: original.sourcePath,
