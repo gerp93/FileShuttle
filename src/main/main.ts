@@ -1,10 +1,13 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, Notification, shell } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
+import * as fs from 'fs';
 import { Database } from 'sql.js';
 import { initDatabase, saveDatabase } from './database/schema';
 import * as repo from './database/repository';
 import {
+  pinUserDataPath,
+  getConfiguredDbPath,
   getEffectiveDbPath,
   getDefaultDbPath,
   isUsingDefaultLocation,
@@ -28,6 +31,7 @@ import {
   UpdateMappingInput,
 } from '../shared/types';
 
+pinUserDataPath();
 app.setName('fileshuttle');
 
 let mainWindow: BrowserWindow | null = null;
@@ -42,6 +46,10 @@ let isQuitting = false;
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
+  // app.quit() has been observed leaving this process alive for hours
+  // instead of exiting (the loser of the lock never reaches 'ready', so
+  // there's no window/before-quit lifecycle to fall back on) -- force it.
+  setTimeout(() => process.exit(0), 1000);
 } else {
   app.on('second-instance', () => {
     showWindow();
@@ -396,6 +404,25 @@ function registerIPCHandlers(): void {
 }
 
 app.whenReady().then(async () => {
+  const configuredDbPath = getConfiguredDbPath();
+  if (configuredDbPath && !fs.existsSync(configuredDbPath)) {
+    const result = await dialog.showMessageBox({
+      type: 'error',
+      title: 'Database not found',
+      message: "FileShuttle can't find your configured database file.",
+      detail: `Expected it at:\n${configuredDbPath}\n\nThis can happen if a drive is disconnected or a synced folder hasn't loaded yet. Reconnect it and relaunch, or switch back to the default location.`,
+      buttons: ['Quit', 'Use Default Location'],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (result.response === 1) {
+      resetToDefaultDbPath();
+      app.relaunch();
+    }
+    app.exit();
+    return;
+  }
+
   const startHidden = process.argv.includes('--start-hidden');
   db = await initDatabase();
   repo.migrateChainsToJobs(db);
