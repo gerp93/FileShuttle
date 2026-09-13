@@ -66,6 +66,25 @@ if (!gotLock) {
   });
 }
 
+// Shown the instant the window is created, before initDatabase() (and
+// everything after it) has had a chance to run. Startup can stall for
+// reasons outside our control (antivirus scanning a freshly-installed exe,
+// slow disk, etc.) -- without this, a stalled launch looks indistinguishable
+// from "nothing happened," because no window appears at all until the whole
+// backend is ready.
+function loadLoadingScreen(win: BrowserWindow): void {
+  const html = `<!doctype html><html><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0d47a1;color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;"><p>Starting FileShuttle…</p></body></html>`;
+  win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+}
+
+function loadAppContent(win: BrowserWindow): void {
+  if (!app.isPackaged) {
+    win.loadURL('http://localhost:5173');
+  } else {
+    win.loadFile(path.join(__dirname, '../../renderer/index.html'));
+  }
+}
+
 function createWindow(startHidden = false): void {
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -82,10 +101,14 @@ function createWindow(startHidden = false): void {
     backgroundColor: '#0d47a1',
   });
 
-  if (!app.isPackaged) {
-    mainWindow.loadURL('http://localhost:5173');
+  // appInitialized is only true once the backend (db, IPC handlers) is fully
+  // ready -- which only happens for a window created *after* startup already
+  // finished (e.g. showWindow() recreating a closed window). The very first
+  // window, created before any of that has run, gets the loading screen.
+  if (appInitialized) {
+    loadAppContent(mainWindow);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../../renderer/index.html'));
+    loadLoadingScreen(mainWindow);
   }
 
   mainWindow.on('close', (event) => {
@@ -443,6 +466,11 @@ app.whenReady().then(async () => {
   }
 
   const startHidden = process.argv.includes('--start-hidden');
+  // Create the window (showing the loading screen) before the potentially
+  // slow work below, so a stalled startup shows *something* instead of
+  // nothing at all.
+  createWindow(startHidden);
+
   db = await initDatabase();
   repo.migrateChainsToJobs(db);
   saveDatabase(db);
@@ -463,7 +491,7 @@ app.whenReady().then(async () => {
   });
 
   registerIPCHandlers();
-  createWindow(startHidden);
+  if (mainWindow) loadAppContent(mainWindow);
   createTray();
   appInitialized = true;
   scheduler.start();
