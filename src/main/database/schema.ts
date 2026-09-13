@@ -2,6 +2,7 @@ import initSqlJs, { Database } from 'sql.js';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getEffectiveDbPath } from '../dbLocation';
+import { logStartupStep } from '../startupLog';
 
 let dbInstance: Database | null = null;
 let currentDbPath: string | null = null;
@@ -378,22 +379,31 @@ function initSchema(db: Database): void {
 }
 
 export async function initDatabase(dbPath?: string): Promise<Database> {
+  logStartupStep('initDatabase: start, calling initSqlJs()');
   const SQL = await initSqlJs();
+  logStartupStep('initDatabase: initSqlJs() resolved');
   dbPath = dbPath ?? getEffectiveDbPath();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   let db: Database;
   if (fs.existsSync(dbPath)) {
+    logStartupStep(`initDatabase: reading existing db file at ${dbPath}`);
     const buffer = fs.readFileSync(dbPath);
+    logStartupStep('initDatabase: file read, constructing SQL.Database from buffer');
     db = new SQL.Database(buffer);
+    logStartupStep('initDatabase: SQL.Database constructed from buffer');
   } else {
+    logStartupStep('initDatabase: no existing db file, constructing a fresh SQL.Database');
     db = new SQL.Database();
   }
 
   dbInstance = db;
   currentDbPath = dbPath;
+  logStartupStep('initDatabase: running initSchema()');
   initSchema(db);
+  logStartupStep('initDatabase: initSchema() done, calling saveDatabase()');
   saveDatabase(db, dbPath);
+  logStartupStep('initDatabase: saveDatabase() done, returning');
   return db;
 }
 
