@@ -348,6 +348,7 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('dialogs:pickFolder', async (_, title: string) => {
     if (!mainWindow) return null;
+    mainWindow.focus();
     const result = await dialog.showOpenDialog(mainWindow, {
       title,
       properties: ['openDirectory'],
@@ -365,6 +366,7 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('dbLocation:browseExisting', async () => {
     if (!mainWindow) return null;
+    mainWindow.focus();
     const result = await dialog.showOpenDialog(mainWindow, {
       title: 'Choose an existing FileShuttle database file',
       properties: ['openFile'],
@@ -375,6 +377,7 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('dbLocation:browseNew', async () => {
     if (!mainWindow) return null;
+    mainWindow.focus();
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Choose a new location for the FileShuttle database',
       defaultPath: 'fileshuttle.db',
