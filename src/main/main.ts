@@ -42,6 +42,15 @@ let watcher: WatcherService | null = null;
 let retention: RetentionService | null = null;
 let announcedBackground = false;
 let isQuitting = false;
+// Guards against a real race: if a second launch attempt's 'second-instance'
+// event lands while this process is still awaiting initDatabase() (loading
+// the sql.js WASM engine takes a moment), showWindow() would see mainWindow
+// as still null and create a *second* window ahead of the real startup
+// flow -- one whose renderer calls the API before registerIPCHandlers() has
+// run, permanently stuck showing "No handler registered" / default values,
+// even though the database itself is completely fine. Only act on
+// second-instance once startup has actually finished.
+let appInitialized = false;
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -52,6 +61,7 @@ if (!gotLock) {
   setTimeout(() => process.exit(0), 1000);
 } else {
   app.on('second-instance', () => {
+    if (!appInitialized) return;
     showWindow();
   });
 }
@@ -348,6 +358,7 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('dialogs:pickFolder', async (_, title: string) => {
     if (!mainWindow) return null;
+    mainWindow.focus();
     const result = await dialog.showOpenDialog(mainWindow, {
       title,
       properties: ['openDirectory'],
@@ -365,6 +376,7 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('dbLocation:browseExisting', async () => {
     if (!mainWindow) return null;
+    mainWindow.focus();
     const result = await dialog.showOpenDialog(mainWindow, {
       title: 'Choose an existing FileShuttle database file',
       properties: ['openFile'],
@@ -375,6 +387,7 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('dbLocation:browseNew', async () => {
     if (!mainWindow) return null;
+    mainWindow.focus();
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Choose a new location for the FileShuttle database',
       defaultPath: 'fileshuttle.db',
@@ -404,6 +417,12 @@ function registerIPCHandlers(): void {
 }
 
 app.whenReady().then(async () => {
+  // Belt-and-suspenders: this callback is registered unconditionally above,
+  // so make it explicit that the process which lost the single-instance
+  // lock must never touch the database, even if 'ready' somehow still
+  // fires for it before app.quit()/process.exit() take effect.
+  if (!gotLock) return;
+
   const configuredDbPath = getConfiguredDbPath();
   if (configuredDbPath && !fs.existsSync(configuredDbPath)) {
     const result = await dialog.showMessageBox({
@@ -446,6 +465,7 @@ app.whenReady().then(async () => {
   registerIPCHandlers();
   createWindow(startHidden);
   createTray();
+  appInitialized = true;
   scheduler.start();
   watcher.start();
   setupAutoUpdater();
