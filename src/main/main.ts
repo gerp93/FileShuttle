@@ -2,6 +2,7 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, Notificat
 import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
 import * as fs from 'fs';
+import { spawn } from 'child_process';
 import { Database } from 'sql.js';
 import { initDatabase, saveDatabase } from './database/schema';
 import * as repo from './database/repository';
@@ -14,7 +15,7 @@ import {
   setDbPath,
   resetToDefaultDbPath,
 } from './dbLocation';
-import { logStartupStep } from './startupLog';
+import { logStartupStep, resetStartupLog } from './startupLog';
 import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
@@ -65,6 +66,24 @@ if (!gotLock) {
     if (!appInitialized) return;
     showWindow();
   });
+}
+
+// A JS-level timeout inside this same process can't help if startup is truly
+// stuck on the one JS thread -- it would never get to fire either. Spawn a
+// genuinely separate process (the bundled electron.exe run as plain Node via
+// ELECTRON_RUN_AS_NODE) that watches startup.log from the outside and kills +
+// relaunches this process if "startup complete" never shows up in time. See
+// watchdog.ts for the full mechanism and the retry/give-up logic.
+function spawnStartupWatchdog(): void {
+  if (!app.isPackaged) return; // dev already runs isolated data + is fast; not worth it
+  const watchdogScript = path.join(__dirname, 'watchdog.js');
+  const logPath = path.join(app.getPath('userData'), 'startup.log');
+  const attempt = process.env.FILESHUTTLE_WATCHDOG_ATTEMPT ?? '0';
+  spawn(process.execPath, [watchdogScript, String(process.pid), logPath, attempt, app.getPath('exe')], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  }).unref();
 }
 
 // Shown the instant the window is created, before initDatabase() (and
@@ -441,12 +460,15 @@ function registerIPCHandlers(): void {
 }
 
 app.whenReady().then(async () => {
-  logStartupStep('main: whenReady fired');
   // Belt-and-suspenders: this callback is registered unconditionally above,
   // so make it explicit that the process which lost the single-instance
   // lock must never touch the database, even if 'ready' somehow still
   // fires for it before app.quit()/process.exit() take effect.
   if (!gotLock) return;
+
+  resetStartupLog();
+  logStartupStep('main: whenReady fired');
+  spawnStartupWatchdog();
 
   const configuredDbPath = getConfiguredDbPath();
   if (configuredDbPath && !fs.existsSync(configuredDbPath)) {

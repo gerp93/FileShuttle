@@ -9,12 +9,28 @@ import { app } from 'electron';
 // useless here -- write each step to a file in userData instead, so a stuck
 // launch's log says exactly which step never returned. Remove once the
 // cause is found and fixed.
+export function getStartupLogPath(): string {
+  return path.join(app.getPath('userData'), 'startup.log');
+}
+
+// The log is append-only across a process's run, but must start empty each
+// launch -- otherwise a stale "startup complete" line from a previous run
+// would make the watchdog (watchdog.ts) think *this* run finished instantly
+// when it's actually the one that's stuck. Call once, before the first
+// logStartupStep() of a run.
+export function resetStartupLog(): void {
+  try {
+    fs.writeFileSync(getStartupLogPath(), '');
+  } catch {
+    // best-effort diagnostic logging; never let it break startup
+  }
+}
+
 export function logStartupStep(label: string): void {
   const line = `[startup ${new Date().toISOString()}] ${label}`;
   console.log(line);
   try {
-    const logPath = path.join(app.getPath('userData'), 'startup.log');
-    fs.appendFileSync(logPath, line + '\n');
+    fs.appendFileSync(getStartupLogPath(), line + '\n');
   } catch {
     // best-effort diagnostic logging; never let it break startup
   }
