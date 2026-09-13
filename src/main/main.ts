@@ -42,6 +42,15 @@ let watcher: WatcherService | null = null;
 let retention: RetentionService | null = null;
 let announcedBackground = false;
 let isQuitting = false;
+// Guards against a real race: if a second launch attempt's 'second-instance'
+// event lands while this process is still awaiting initDatabase() (loading
+// the sql.js WASM engine takes a moment), showWindow() would see mainWindow
+// as still null and create a *second* window ahead of the real startup
+// flow -- one whose renderer calls the API before registerIPCHandlers() has
+// run, permanently stuck showing "No handler registered" / default values,
+// even though the database itself is completely fine. Only act on
+// second-instance once startup has actually finished.
+let appInitialized = false;
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -52,6 +61,7 @@ if (!gotLock) {
   setTimeout(() => process.exit(0), 1000);
 } else {
   app.on('second-instance', () => {
+    if (!appInitialized) return;
     showWindow();
   });
 }
@@ -455,6 +465,7 @@ app.whenReady().then(async () => {
   registerIPCHandlers();
   createWindow(startHidden);
   createTray();
+  appInitialized = true;
   scheduler.start();
   watcher.start();
   setupAutoUpdater();
