@@ -14,6 +14,7 @@ import {
   setDbPath,
   resetToDefaultDbPath,
 } from './dbLocation';
+import { logStartupStep } from './startupLog';
 import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
@@ -440,6 +441,7 @@ function registerIPCHandlers(): void {
 }
 
 app.whenReady().then(async () => {
+  logStartupStep('main: whenReady fired');
   // Belt-and-suspenders: this callback is registered unconditionally above,
   // so make it explicit that the process which lost the single-instance
   // lock must never touch the database, even if 'ready' somehow still
@@ -469,31 +471,44 @@ app.whenReady().then(async () => {
   // Create the window (showing the loading screen) before the potentially
   // slow work below, so a stalled startup shows *something* instead of
   // nothing at all.
+  logStartupStep('main: past configuredDbPath check, creating window');
   createWindow(startHidden);
+  logStartupStep('main: window created');
 
+  const logStep = logStartupStep;
+
+  logStep('main: calling initDatabase()');
   db = await initDatabase();
+  logStep('main: initDatabase() returned, calling migrateChainsToJobs()');
   repo.migrateChainsToJobs(db);
+  logStep('main: migrateChainsToJobs() done, calling saveDatabase()');
   saveDatabase(db);
+  logStep('main: saveDatabase() done, starting retention service');
 
   retention = new RetentionService(db);
   retention.start();
+  logStep('main: retention started, constructing scheduler');
 
   scheduler = new SchedulerService(db, (jobId, result) => {
     const job = repo.getJob(db!, jobId);
     const jobName = job?.name ?? `job #${jobId}`;
     showTrayNotification('FileShuttle: scheduled run finished', `"${jobName}" — ${summarizeResult(result)}`);
   });
+  logStep('main: scheduler constructed, constructing watcher');
 
   watcher = new WatcherService(db, (jobId, result) => {
     const job = repo.getJob(db!, jobId);
     const jobName = job?.name ?? `job #${jobId}`;
     showTrayNotification('FileShuttle: watched folder run finished', `"${jobName}" — ${summarizeResult(result)}`);
   });
+  logStep('main: watcher constructed, registering IPC handlers');
 
   registerIPCHandlers();
+  logStep('main: IPC handlers registered, loading app content');
   if (mainWindow) loadAppContent(mainWindow);
   createTray();
   appInitialized = true;
+  logStep('main: startup complete');
   scheduler.start();
   watcher.start();
   setupAutoUpdater();
