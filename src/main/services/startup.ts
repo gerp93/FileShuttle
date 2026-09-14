@@ -11,7 +11,9 @@ export function setStartupEnabled(enabled: boolean): void {
   if (!isStartupSupported) return;
   app.setLoginItemSettings({
     openAtLogin: enabled,
-    openAsHidden: true,
+    // openAsHidden is macOS-only (newer Electron types now enforce that --
+    // Windows hidden-start is handled below via the --start-hidden arg).
+    ...(process.platform === 'darwin' ? { openAsHidden: true } : {}),
     args: process.platform === 'win32' ? ['--start-hidden'] : undefined,
   });
 }
