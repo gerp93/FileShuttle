@@ -97,6 +97,15 @@ function loadLoadingScreen(win: BrowserWindow): void {
   win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
 
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function showStartupError(win: BrowserWindow, error: string): void {
+  const html = `<!doctype html><html><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0d47a1;color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;padding:24px;box-sizing:border-box;"><div style="max-width:640px;"><p style="font-size:18px;margin:0 0 12px;">FileShuttle failed to start</p><pre style="white-space:pre-wrap;background:#0a3380;padding:12px;border-radius:8px;font-size:12px;">${escapeHtml(error)}</pre></div></body></html>`;
+  win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+}
+
 function loadAppContent(win: BrowserWindow): void {
   if (!app.isPackaged) {
     win.loadURL('http://localhost:5173');
@@ -499,49 +508,59 @@ app.whenReady().then(async () => {
 
   const logStep = logStartupStep;
 
-  logStep('main: calling initDatabase()');
-  db = await initDatabase();
-  logStep('main: initDatabase() returned, calling migrateChainsToJobs()');
-  repo.migrateChainsToJobs(db);
-  logStep('main: migrateChainsToJobs() done, calling saveDatabase()');
-  saveDatabase(db);
-  logStep('main: saveDatabase() done, starting retention service');
+  try {
+    logStep('main: calling initDatabase()');
+    db = await initDatabase();
+    logStep('main: initDatabase() returned, calling migrateChainsToJobs()');
+    repo.migrateChainsToJobs(db);
+    logStep('main: migrateChainsToJobs() done, calling saveDatabase()');
+    saveDatabase(db);
+    logStep('main: saveDatabase() done, starting retention service');
 
-  retention = new RetentionService(db);
-  retention.start();
-  logStep('main: retention started, constructing scheduler');
+    retention = new RetentionService(db);
+    retention.start();
+    logStep('main: retention started, constructing scheduler');
 
-  scheduler = new SchedulerService(db, (jobId, result) => {
-    const job = repo.getJob(db!, jobId);
-    const jobName = job?.name ?? `job #${jobId}`;
-    showTrayNotification('FileShuttle: scheduled run finished', `"${jobName}" — ${summarizeResult(result)}`);
-  });
-  logStep('main: scheduler constructed, constructing watcher');
+    scheduler = new SchedulerService(db, (jobId, result) => {
+      const job = repo.getJob(db!, jobId);
+      const jobName = job?.name ?? `job #${jobId}`;
+      showTrayNotification('FileShuttle: scheduled run finished', `"${jobName}" — ${summarizeResult(result)}`);
+    });
+    logStep('main: scheduler constructed, constructing watcher');
 
-  watcher = new WatcherService(db, (jobId, result) => {
-    const job = repo.getJob(db!, jobId);
-    const jobName = job?.name ?? `job #${jobId}`;
-    showTrayNotification('FileShuttle: watched folder run finished', `"${jobName}" — ${summarizeResult(result)}`);
-  });
-  logStep('main: watcher constructed, registering IPC handlers');
+    watcher = new WatcherService(db, (jobId, result) => {
+      const job = repo.getJob(db!, jobId);
+      const jobName = job?.name ?? `job #${jobId}`;
+      showTrayNotification('FileShuttle: watched folder run finished', `"${jobName}" — ${summarizeResult(result)}`);
+    });
+    logStep('main: watcher constructed, registering IPC handlers');
 
-  registerIPCHandlers();
-  logStep('main: IPC handlers registered, loading app content');
-  if (mainWindow) loadAppContent(mainWindow);
-  createTray();
-  appInitialized = true;
-  logStep('main: startup complete');
-  scheduler.start();
-  watcher.start();
-  setupAutoUpdater();
+    registerIPCHandlers();
+    logStep('main: IPC handlers registered, loading app content');
+    if (mainWindow) loadAppContent(mainWindow);
+    createTray();
+    appInitialized = true;
+    logStep('main: startup complete');
+    scheduler.start();
+    watcher.start();
+    setupAutoUpdater();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(false);
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow(false);
+      } else {
+        showWindow();
+      }
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.stack ?? err.message : String(err);
+    logStep(`main: startup failed: ${message}`);
+    if (mainWindow) {
+      showStartupError(mainWindow, message);
     } else {
-      showWindow();
+      dialog.showErrorBox('FileShuttle failed to start', message);
     }
-  });
+  }
 });
 
 app.on('before-quit', () => {

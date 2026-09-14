@@ -120,7 +120,8 @@ const interval = setInterval(() => {
     process.exit(0);
   }
 
-  if (readLog().includes('main: startup complete')) {
+  const log = readLog();
+  if (log.includes('main: startup complete') || log.includes('main: startup failed:')) {
     clearInterval(interval);
     process.exit(0);
   }
