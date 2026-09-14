@@ -19,6 +19,8 @@ const attempt = Number(attemptArg);
 const TIMEOUT_MS = 25000;
 const POLL_MS = 1000;
 const MAX_ATTEMPTS = 2;
+const WAIT_FOR_DEATH_MS = 5000;
+const GRACE_AFTER_DEATH_MS = 2000;
 const startedAt = Date.now();
 
 function isAlive(pid: number): boolean {
@@ -46,59 +48,86 @@ function readLog(): string {
   }
 }
 
+function relaunch(): void {
+  log(`relaunching (attempt ${attempt + 1} of ${MAX_ATTEMPTS}): ${exePath}`);
+  // spawn() returning doesn't mean the OS actually created the process --
+  // success/failure only shows up later via the 'spawn'/'error' events. Wait
+  // for one of those (with a hard cap so a wedged spawn call can't hang this
+  // forever) before exiting, so a failed relaunch is at least visible here
+  // instead of vanishing with zero trace.
+  const child = spawn(exePath, [], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, FILESHUTTLE_WATCHDOG_ATTEMPT: String(attempt + 1) },
+  });
+  const finish = () => process.exit(0);
+  child.once('error', (err) => {
+    log(`relaunch FAILED to spawn: ${err && err.stack ? err.stack : String(err)}`);
+    finish();
+  });
+  child.once('spawn', () => {
+    log(`relaunch spawned successfully, pid ${child.pid}`);
+    child.unref();
+    finish();
+  });
+  setTimeout(() => {
+    log('relaunch spawn() neither errored nor confirmed spawning within 5s -- giving up waiting');
+    finish();
+  }, 5000).unref();
+}
+
+function killThenRelaunch(): void {
+  try {
+    process.kill(targetPid);
+  } catch {
+    // already gone
+  }
+  log(`startup did not complete within ${TIMEOUT_MS}ms (attempt ${attempt}); killed pid ${targetPid}`);
+
+  if (attempt >= MAX_ATTEMPTS) {
+    log(`giving up after ${attempt} retries -- leaving it stopped rather than retrying forever`);
+    process.exit(0);
+    return;
+  }
+
+  // Confirmed live: relaunching ~12ms after the kill meant the new process's
+  // own requestSingleInstanceLock() call raced the OS still tearing down the
+  // killed process's (and its GPU/renderer/utility children's) handles --
+  // it lost that race, concluded another instance was already running, and
+  // quietly self-terminated before ever reaching whenReady. No crash, no log
+  // line, no trace: exactly what "the retry silently did nothing" looks
+  // like. Wait for the PID to actually be gone, then a further grace period,
+  // before spawning the replacement.
+  const waitStart = Date.now();
+  const waitForDeath = setInterval(() => {
+    const dead = !isAlive(targetPid);
+    const timedOut = Date.now() - waitStart > WAIT_FOR_DEATH_MS;
+    if (!dead && !timedOut) return;
+
+    clearInterval(waitForDeath);
+    log(
+      dead
+        ? `pid ${targetPid} confirmed gone after ${Date.now() - waitStart}ms; waiting a further ${GRACE_AFTER_DEATH_MS}ms before relaunching`
+        : `pid ${targetPid} still not confirmed gone after ${WAIT_FOR_DEATH_MS}ms; relaunching anyway`
+    );
+    setTimeout(relaunch, dead ? GRACE_AFTER_DEATH_MS : 0);
+  }, 200);
+}
+
 const interval = setInterval(() => {
   if (!isAlive(targetPid)) {
     clearInterval(interval);
     process.exit(0);
   }
 
-  if (readLog().includes('main: startup complete')) {
+  const log = readLog();
+  if (log.includes('main: startup complete') || log.includes('main: startup failed:')) {
     clearInterval(interval);
     process.exit(0);
   }
 
   if (Date.now() - startedAt > TIMEOUT_MS) {
     clearInterval(interval);
-    try {
-      process.kill(targetPid);
-    } catch {
-      // already gone
-    }
-    log(`startup did not complete within ${TIMEOUT_MS}ms (attempt ${attempt}); killed pid ${targetPid}`);
-
-    if (attempt < MAX_ATTEMPTS) {
-      log(`relaunching (attempt ${attempt + 1} of ${MAX_ATTEMPTS}): ${exePath}`);
-      // spawn() returning doesn't mean the OS actually created the process --
-      // success/failure only shows up later via the 'spawn'/'error' events. A
-      // previous version called process.exit(0) immediately after spawn(),
-      // which meant a failed relaunch (wrong path, blocked by AV/AppLocker,
-      // whatever) vanished with zero trace: the watchdog would just exit,
-      // leaving nothing running and nothing logged. Wait for one of those
-      // events (with a hard cap so a wedged spawn can't hang this forever)
-      // before exiting, so a failed relaunch is at least visible here.
-      const child = spawn(exePath, [], {
-        detached: true,
-        stdio: 'ignore',
-        env: { ...process.env, FILESHUTTLE_WATCHDOG_ATTEMPT: String(attempt + 1) },
-      });
-      const finish = () => process.exit(0);
-      child.once('error', (err) => {
-        log(`relaunch FAILED to spawn: ${err && err.stack ? err.stack : String(err)}`);
-        finish();
-      });
-      child.once('spawn', () => {
-        log(`relaunch spawned successfully, pid ${child.pid}`);
-        child.unref();
-        finish();
-      });
-      setTimeout(() => {
-        log('relaunch spawn() neither errored nor confirmed spawning within 5s -- giving up waiting');
-        finish();
-      }, 5000).unref();
-      return;
-    }
-
-    log(`giving up after ${attempt} retries -- leaving it stopped rather than retrying forever`);
-    process.exit(0);
+    killThenRelaunch();
   }
 }, POLL_MS);

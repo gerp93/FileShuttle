@@ -99,27 +99,37 @@ function addColumnIfMissing(db: Database, table: string, column: string, ddl: st
   }
 }
 
-function widenRunHistoryFilesOutcomeCheck(db: Database): void {
+function rewriteRunHistoryFilesTable(db: Database, alreadyHasToken: string, outcomeCheck: string): void {
   const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_history_files'");
   if (!rows.length || !rows[0].values.length) return;
   const sql = String(rows[0].values[0][0] ?? '');
-  if (sql.includes("'copied'")) return;
+  if (sql.includes(alreadyHasToken)) return;
 
+  // Older builds (and SQLite's default FK-off mode) could leave file rows
+  // whose parent run was deleted. Re-inserting those with FKs on throws
+  // and leaves startup stuck on the loading screen.
+  db.run('PRAGMA foreign_keys = OFF');
   db.run('ALTER TABLE run_history_files RENAME TO run_history_files_old');
   db.run(`CREATE TABLE run_history_files (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id          INTEGER NOT NULL REFERENCES run_history(id) ON DELETE CASCADE,
     source_path     TEXT NOT NULL,
     dest_path       TEXT,
-    outcome         TEXT NOT NULL CHECK (outcome IN ('moved','copied','deleted','skipped','error')),
+    outcome         TEXT NOT NULL CHECK (outcome IN (${outcomeCheck})),
     reason          TEXT,
     file_size_bytes INTEGER
   )`);
   db.run(
     'INSERT INTO run_history_files (id, run_id, source_path, dest_path, outcome, reason, file_size_bytes) ' +
-      'SELECT id, run_id, source_path, dest_path, outcome, reason, file_size_bytes FROM run_history_files_old'
+      'SELECT old.id, old.run_id, old.source_path, old.dest_path, old.outcome, old.reason, old.file_size_bytes ' +
+      'FROM run_history_files_old old INNER JOIN run_history r ON r.id = old.run_id'
   );
   db.run('DROP TABLE run_history_files_old');
+  db.run('PRAGMA foreign_keys = ON');
+}
+
+function widenRunHistoryFilesOutcomeCheck(db: Database): void {
+  rewriteRunHistoryFilesTable(db, "'copied'", "'moved','copied','deleted','skipped','error'");
 }
 
 function widenRunHistoryForSystemEvents(db: Database): void {
@@ -246,26 +256,11 @@ function widenMappingsActionTypeCheck(db: Database): void {
 }
 
 function widenRunHistoryFilesOutcomeCheckForZip(db: Database): void {
-  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_history_files'");
-  if (!rows.length || !rows[0].values.length) return;
-  const sql = String(rows[0].values[0][0] ?? '');
-  if (sql.includes("'extracted'")) return;
-
-  db.run('ALTER TABLE run_history_files RENAME TO run_history_files_old');
-  db.run(`CREATE TABLE run_history_files (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id          INTEGER NOT NULL REFERENCES run_history(id) ON DELETE CASCADE,
-    source_path     TEXT NOT NULL,
-    dest_path       TEXT,
-    outcome         TEXT NOT NULL CHECK (outcome IN ('moved','copied','deleted','skipped','error','extracted','zipped')),
-    reason          TEXT,
-    file_size_bytes INTEGER
-  )`);
-  db.run(
-    'INSERT INTO run_history_files (id, run_id, source_path, dest_path, outcome, reason, file_size_bytes) ' +
-      'SELECT id, run_id, source_path, dest_path, outcome, reason, file_size_bytes FROM run_history_files_old'
+  rewriteRunHistoryFilesTable(
+    db,
+    "'extracted'",
+    "'moved','copied','deleted','skipped','error','extracted','zipped'"
   );
-  db.run('DROP TABLE run_history_files_old');
 }
 
 function widenMappingsActionTypeCheckForZip(db: Database): void {
@@ -340,42 +335,55 @@ function widenJobsScheduleTypeCheckForWatch(db: Database): void {
 }
 
 function initSchema(db: Database): void {
+  const step = (label: string, fn: () => void) => {
+    logStartupStep(`initSchema: ${label}`);
+    fn();
+  };
+
   db.run('PRAGMA foreign_keys = ON');
-  for (const statement of STATEMENTS) {
-    db.run(statement);
-  }
-  addColumnIfMissing(db, 'mappings', 'next_mapping_id', 'next_mapping_id INTEGER REFERENCES mappings(id) ON DELETE SET NULL');
-  addColumnIfMissing(
-    db,
-    'mappings',
-    'action_type',
-    "action_type TEXT NOT NULL DEFAULT 'move' CHECK (action_type IN ('move','copy','delete'))"
-  );
-  addColumnIfMissing(
-    db,
-    'run_history',
-    'triggered_by_run_id',
-    'triggered_by_run_id INTEGER REFERENCES run_history(id) ON DELETE SET NULL'
-  );
-  addColumnIfMissing(db, 'run_history', 'files_deleted', 'files_deleted INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing(db, 'run_history', 'files_copied', 'files_copied INTEGER NOT NULL DEFAULT 0');
-  widenRunHistoryFilesOutcomeCheck(db);
-  widenMappingsActionTypeCheck(db);
-  addColumnIfMissing(db, 'mappings', 'keep_newest', 'keep_newest INTEGER');
-  addColumnIfMissing(
-    db,
-    'run_history',
-    'job_id',
-    'job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL'
-  );
-  addColumnIfMissing(db, 'run_history', 'job_name_snapshot', 'job_name_snapshot TEXT');
-  widenRunHistoryForSystemEvents(db);
-  widenRunHistoryStatusCheck(db);
-  addColumnIfMissing(db, 'run_history', 'files_extracted', 'files_extracted INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing(db, 'run_history', 'files_zipped', 'files_zipped INTEGER NOT NULL DEFAULT 0');
-  widenRunHistoryFilesOutcomeCheckForZip(db);
-  widenMappingsActionTypeCheckForZip(db);
-  widenJobsScheduleTypeCheckForWatch(db);
+  step('CREATE TABLE IF NOT EXISTS', () => {
+    for (const statement of STATEMENTS) {
+      db.run(statement);
+    }
+  });
+  step('add missing mapping/history columns', () => {
+    addColumnIfMissing(db, 'mappings', 'next_mapping_id', 'next_mapping_id INTEGER REFERENCES mappings(id) ON DELETE SET NULL');
+    addColumnIfMissing(
+      db,
+      'mappings',
+      'action_type',
+      "action_type TEXT NOT NULL DEFAULT 'move' CHECK (action_type IN ('move','copy','delete'))"
+    );
+    addColumnIfMissing(
+      db,
+      'run_history',
+      'triggered_by_run_id',
+      'triggered_by_run_id INTEGER REFERENCES run_history(id) ON DELETE SET NULL'
+    );
+    addColumnIfMissing(db, 'run_history', 'files_deleted', 'files_deleted INTEGER NOT NULL DEFAULT 0');
+    addColumnIfMissing(db, 'run_history', 'files_copied', 'files_copied INTEGER NOT NULL DEFAULT 0');
+  });
+  step('widenRunHistoryFilesOutcomeCheck', () => widenRunHistoryFilesOutcomeCheck(db));
+  step('widenMappingsActionTypeCheck', () => widenMappingsActionTypeCheck(db));
+  step('add keep_newest / job snapshot columns', () => {
+    addColumnIfMissing(db, 'mappings', 'keep_newest', 'keep_newest INTEGER');
+    addColumnIfMissing(
+      db,
+      'run_history',
+      'job_id',
+      'job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL'
+    );
+    addColumnIfMissing(db, 'run_history', 'job_name_snapshot', 'job_name_snapshot TEXT');
+  });
+  step('widenRunHistoryForSystemEvents', () => widenRunHistoryForSystemEvents(db));
+  step('widenRunHistoryStatusCheck', () => widenRunHistoryStatusCheck(db));
+  step('add zip count columns', () => {
+    addColumnIfMissing(db, 'run_history', 'files_extracted', 'files_extracted INTEGER NOT NULL DEFAULT 0');
+    addColumnIfMissing(db, 'run_history', 'files_zipped', 'files_zipped INTEGER NOT NULL DEFAULT 0');
+  });
+  step('widenRunHistoryFilesOutcomeCheckForZip', () => widenRunHistoryFilesOutcomeCheckForZip(db));
+  step('widenMappingsActionTypeCheckForZip', () => widenMappingsActionTypeCheckForZip(db));
+  step('widenJobsScheduleTypeCheckForWatch', () => widenJobsScheduleTypeCheckForWatch(db));
 }
 
 export async function initDatabase(dbPath?: string): Promise<Database> {
