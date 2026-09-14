@@ -67,15 +67,38 @@ const interval = setInterval(() => {
     log(`startup did not complete within ${TIMEOUT_MS}ms (attempt ${attempt}); killed pid ${targetPid}`);
 
     if (attempt < MAX_ATTEMPTS) {
-      log(`relaunching (attempt ${attempt + 1} of ${MAX_ATTEMPTS})`);
-      spawn(exePath, [], {
+      log(`relaunching (attempt ${attempt + 1} of ${MAX_ATTEMPTS}): ${exePath}`);
+      // spawn() returning doesn't mean the OS actually created the process --
+      // success/failure only shows up later via the 'spawn'/'error' events. A
+      // previous version called process.exit(0) immediately after spawn(),
+      // which meant a failed relaunch (wrong path, blocked by AV/AppLocker,
+      // whatever) vanished with zero trace: the watchdog would just exit,
+      // leaving nothing running and nothing logged. Wait for one of those
+      // events (with a hard cap so a wedged spawn can't hang this forever)
+      // before exiting, so a failed relaunch is at least visible here.
+      const child = spawn(exePath, [], {
         detached: true,
         stdio: 'ignore',
         env: { ...process.env, FILESHUTTLE_WATCHDOG_ATTEMPT: String(attempt + 1) },
-      }).unref();
-    } else {
-      log(`giving up after ${attempt} retries -- leaving it stopped rather than retrying forever`);
+      });
+      const finish = () => process.exit(0);
+      child.once('error', (err) => {
+        log(`relaunch FAILED to spawn: ${err && err.stack ? err.stack : String(err)}`);
+        finish();
+      });
+      child.once('spawn', () => {
+        log(`relaunch spawned successfully, pid ${child.pid}`);
+        child.unref();
+        finish();
+      });
+      setTimeout(() => {
+        log('relaunch spawn() neither errored nor confirmed spawning within 5s -- giving up waiting');
+        finish();
+      }, 5000).unref();
+      return;
     }
+
+    log(`giving up after ${attempt} retries -- leaving it stopped rather than retrying forever`);
     process.exit(0);
   }
 }, POLL_MS);
