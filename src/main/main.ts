@@ -16,6 +16,7 @@ import {
   resetToDefaultDbPath,
 } from './dbLocation';
 import { logStartupStep, resetStartupLog } from './startupLog';
+import { attachContextMenu, setupApplicationMenu } from './menu';
 import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
@@ -148,6 +149,8 @@ function createWindow(startHidden = false): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  attachContextMenu(mainWindow);
 }
 
 function showWindow(): void {
@@ -469,6 +472,8 @@ app.whenReady().then(async () => {
   resetStartupLog();
   logStartupStep('main: whenReady fired');
   spawnStartupWatchdog();
+
+  setupApplicationMenu();
 
   const configuredDbPath = getConfiguredDbPath();
   if (configuredDbPath && !fs.existsSync(configuredDbPath)) {
