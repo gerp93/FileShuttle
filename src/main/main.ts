@@ -35,6 +35,10 @@ import {
 
 pinUserDataPath();
 app.setName('fileshuttle');
+// Must match build.appId in package.json and the installer/taskbar shortcut.
+// Without this, Windows uses Electron's default (electron.app.FileShuttle) and
+// the pinned shortcut (com.fileshuttle.app) shows as a second taskbar icon.
+app.setAppUserModelId('com.fileshuttle.app');
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
