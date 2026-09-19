@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, Notification, shell } from 'electron';
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, Notification, shell, powerMonitor } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -178,7 +178,82 @@ function showTrayNotification(title: string, body: string): void {
   }
 }
 
-function summarizeResult(result: RunResult): string {
+// Runs that finish while nobody is at the computer (locked screen, or no input
+// for AWAY_IDLE_SECONDS) are tallied instead of toasted one by one, then shown
+// as a single summary once the user is back -- otherwise a night of scheduled
+// runs leaves dozens of stale toasts in the Action Center.
+const AWAY_IDLE_SECONDS = 300;
+const AWAY_POLL_MS = 30_000;
+
+type RunCounts = Pick<
+  RunResult,
+  'filesMoved' | 'filesCopied' | 'filesDeleted' | 'filesSkipped' | 'filesErrored' | 'filesExtracted' | 'filesZipped'
+>;
+
+const pendingAway = {
+  runs: 0,
+  jobIds: new Set<number>(),
+  totals: {
+    filesMoved: 0,
+    filesCopied: 0,
+    filesDeleted: 0,
+    filesSkipped: 0,
+    filesErrored: 0,
+    filesExtracted: 0,
+    filesZipped: 0,
+  } as RunCounts,
+};
+let awayPollTimer: NodeJS.Timeout | null = null;
+
+function isUserAway(): boolean {
+  const state = powerMonitor.getSystemIdleState(AWAY_IDLE_SECONDS);
+  return state === 'locked' || state === 'idle';
+}
+
+function flushAwayDigest(): void {
+  if (awayPollTimer) {
+    clearInterval(awayPollTimer);
+    awayPollTimer = null;
+  }
+  if (pendingAway.runs === 0) return;
+
+  const runs = pendingAway.runs;
+  const jobs = pendingAway.jobIds.size;
+  const detail = summarizeResult(pendingAway.totals);
+  showTrayNotification(
+    'FileShuttle: while you were away',
+    `${runs} run${runs === 1 ? '' : 's'} across ${jobs} job${jobs === 1 ? '' : 's'} — ${detail}`
+  );
+
+  pendingAway.runs = 0;
+  pendingAway.jobIds.clear();
+  for (const key of Object.keys(pendingAway.totals) as (keyof RunCounts)[]) {
+    pendingAway.totals[key] = 0;
+  }
+}
+
+function notifyRunFinished(kind: string, jobId: number, result: RunResult): void {
+  if (isUserAway()) {
+    pendingAway.runs += 1;
+    pendingAway.jobIds.add(jobId);
+    for (const key of Object.keys(pendingAway.totals) as (keyof RunCounts)[]) {
+      pendingAway.totals[key] += result[key];
+    }
+    if (!awayPollTimer) {
+      awayPollTimer = setInterval(() => {
+        if (!isUserAway()) flushAwayDigest();
+      }, AWAY_POLL_MS);
+    }
+    return;
+  }
+
+  flushAwayDigest();
+  const job = repo.getJob(db!, jobId);
+  const jobName = job?.name ?? `job #${jobId}`;
+  showTrayNotification(`FileShuttle: ${kind} run finished`, `"${jobName}" — ${summarizeResult(result)}`);
+}
+
+function summarizeResult(result: RunCounts): string {
   const parts: string[] = [];
   if (result.filesMoved) parts.push(`moved ${result.filesMoved}`);
   if (result.filesCopied) parts.push(`copied ${result.filesCopied}`);
@@ -525,18 +600,10 @@ app.whenReady().then(async () => {
     retention.start();
     logStep('main: retention started, constructing scheduler');
 
-    scheduler = new SchedulerService(db, (jobId, result) => {
-      const job = repo.getJob(db!, jobId);
-      const jobName = job?.name ?? `job #${jobId}`;
-      showTrayNotification('FileShuttle: scheduled run finished', `"${jobName}" — ${summarizeResult(result)}`);
-    });
+    scheduler = new SchedulerService(db, (jobId, result) => notifyRunFinished('scheduled', jobId, result));
     logStep('main: scheduler constructed, constructing watcher');
 
-    watcher = new WatcherService(db, (jobId, result) => {
-      const job = repo.getJob(db!, jobId);
-      const jobName = job?.name ?? `job #${jobId}`;
-      showTrayNotification('FileShuttle: watched folder run finished', `"${jobName}" — ${summarizeResult(result)}`);
-    });
+    watcher = new WatcherService(db, (jobId, result) => notifyRunFinished('watched folder', jobId, result));
     logStep('main: watcher constructed, registering IPC handlers');
 
     registerIPCHandlers();
