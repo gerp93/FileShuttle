@@ -386,6 +386,11 @@ function initSchema(db: Database): void {
   step('widenRunHistoryFilesOutcomeCheckForZip', () => widenRunHistoryFilesOutcomeCheckForZip(db));
   step('widenMappingsActionTypeCheckForZip', () => widenMappingsActionTypeCheckForZip(db));
   step('widenJobsScheduleTypeCheckForWatch', () => widenJobsScheduleTypeCheckForWatch(db));
+  // Must stay after the jobs-table rebuild above, which only copies the columns it knows about.
+  step('add job catch-up columns', () => {
+    addColumnIfMissing(db, 'jobs', 'catch_up', 'catch_up INTEGER NOT NULL DEFAULT 0');
+    addColumnIfMissing(db, 'jobs', 'last_run_at', 'last_run_at TEXT');
+  });
 }
 
 export async function initDatabase(dbPath?: string): Promise<Database> {

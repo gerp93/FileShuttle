@@ -238,12 +238,17 @@ export interface JobRecord {
   scheduleDailyTime: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Run once on start-up/wake if the schedule was missed while the app wasn't running. */
+  catchUp: boolean;
+  /** When the job last ran to completion (ISO); null if it never has. */
+  lastRunAt: string | null;
   steps: MappingRecord[];
 }
 
 export interface CreateJobInput {
   name: string;
   enabled: boolean;
+  catchUp?: boolean;
   scheduleType: ScheduleType;
   scheduleIntervalMinutes: number | null;
   scheduleDailyTime: string | null;

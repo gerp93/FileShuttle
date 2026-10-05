@@ -84,7 +84,8 @@ describe('executeJob', () => {
 
     await executeJob(db, jobId, 'manual');
 
-    expect(vi.mocked(saveDatabase)).toHaveBeenCalledTimes(2);
+    // One save per step, plus one that stamps the job's last-run time.
+    expect(vi.mocked(saveDatabase)).toHaveBeenCalledTimes(3);
   });
 
   it('skips disabled steps', async () => {

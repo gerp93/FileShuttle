@@ -421,6 +421,8 @@ function rowToJob(db: Database, row: Record<string, unknown>): JobRecord {
     scheduleDailyTime: row.schedule_daily_time ? String(row.schedule_daily_time) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    catchUp: toBool(row.catch_up),
+    lastRunAt: row.last_run_at ? String(row.last_run_at) : null,
     steps: loadJobSteps(db, id),
   };
 }
@@ -436,11 +438,12 @@ export function createJob(db: Database, input: CreateJobInput): number {
   run(
     db,
     `INSERT INTO jobs
-      (name, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time)
-     VALUES (?, ?, ?, ?, ?)`,
+      (name, enabled, catch_up, schedule_type, schedule_interval_minutes, schedule_daily_time)
+     VALUES (?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.enabled ? 1 : 0,
+      input.catchUp ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
       input.scheduleDailyTime,
@@ -455,12 +458,13 @@ export function updateJob(db: Database, jobId: number, input: UpdateJobInput): v
   run(
     db,
     `UPDATE jobs SET
-      name = ?, enabled = ?, schedule_type = ?, schedule_interval_minutes = ?,
+      name = ?, enabled = ?, catch_up = ?, schedule_type = ?, schedule_interval_minutes = ?,
       schedule_daily_time = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = ?`,
     [
       input.name,
       input.enabled ? 1 : 0,
+      input.catchUp ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
       input.scheduleDailyTime,
@@ -468,6 +472,10 @@ export function updateJob(db: Database, jobId: number, input: UpdateJobInput): v
     ]
   );
   replaceJobSteps(db, jobId, input.mappingIds);
+}
+
+export function setJobLastRun(db: Database, jobId: number, whenIso: string): void {
+  run(db, 'UPDATE jobs SET last_run_at = ? WHERE id = ?', [whenIso, jobId]);
 }
 
 export function deleteJob(db: Database, jobId: number): void {

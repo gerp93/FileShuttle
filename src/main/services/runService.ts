@@ -80,7 +80,14 @@ export async function executeJob(
         throw new Error(`No job with id ${jobId}`);
       }
       if (controller.signal.aborted) return { ...aggregateResults([]), cancelled: true };
+      const startedAt = new Date().toISOString();
       const results = await runJobSteps(db, job, triggerType, controller.signal);
+      // Remember when it last ran in full, so a missed schedule can be caught up
+      // after the app was closed or the PC asleep. A cancelled run doesn't count.
+      if (results.length && !controller.signal.aborted) {
+        repo.setJobLastRun(db, jobId, startedAt);
+        persistDb(db);
+      }
       const aggregated = aggregateResults(results);
       return controller.signal.aborted ? { ...aggregated, cancelled: true } : aggregated;
     });

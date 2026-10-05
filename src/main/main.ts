@@ -25,6 +25,7 @@ import {
   setRunProgressListener,
 } from './services/runService';
 import { inputToConfig, previewJob, previewMapping } from './services/previewService';
+import { validateJobInput } from '../shared/schedule';
 import { validateMappingInput } from '../shared/validation';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
@@ -389,6 +390,12 @@ function assertValidMapping(input: CreateMappingInput): void {
   if (problem) throw new Error(problem);
 }
 
+/** Rejects a job with no name/steps or an unusable schedule (e.g. a 0-minute interval). */
+function assertValidJob(input: CreateJobInput): void {
+  const problem = validateJobInput(input);
+  if (problem) throw new Error(problem);
+}
+
 function registerIPCHandlers(): void {
   ipcMain.handle('mappings:list', () => {
     return repo.listMappings(db!);
@@ -456,6 +463,7 @@ function registerIPCHandlers(): void {
   ipcMain.handle('jobs:get', (_, id: number) => repo.getJob(db!, id));
 
   ipcMain.handle('jobs:create', (_, input: CreateJobInput) => {
+    assertValidJob(input);
     const id = repo.createJob(db!, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -464,6 +472,7 @@ function registerIPCHandlers(): void {
   });
 
   ipcMain.handle('jobs:update', (_, id: number, input: UpdateJobInput) => {
+    assertValidJob(input);
     repo.updateJob(db!, id, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -689,7 +698,18 @@ app.whenReady().then(async () => {
     announceDatabaseRecovery();
     scheduler.start();
     watcher.start();
+    // The app wasn't running while any schedule that fired since it last ran.
+    scheduler.catchUp();
+    watcher.catchUp();
     setupAutoUpdater();
+
+    // Timers are unreliable across sleep, and files may have landed while the PC
+    // was asleep: rebuild the schedules and pick up anything that was missed.
+    powerMonitor.on('resume', () => {
+      scheduler?.reloadJobs();
+      scheduler?.catchUp();
+      watcher?.catchUp();
+    });
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

@@ -5,9 +5,10 @@ import { errorMessage } from '../utils/errors';
 import PreviewDialog from './PreviewDialog';
 
 function scheduleSummary(record: JobRecord): string {
-  if (record.scheduleType === 'interval') return `Every ${record.scheduleIntervalMinutes} min`;
-  if (record.scheduleType === 'daily_at') return `Daily at ${record.scheduleDailyTime}`;
-  if (record.scheduleType === 'watch') return 'Watching for new files';
+  const catchUp = record.catchUp ? ' · catches up' : '';
+  if (record.scheduleType === 'interval') return `Every ${record.scheduleIntervalMinutes} min${catchUp}`;
+  if (record.scheduleType === 'daily_at') return `Daily at ${record.scheduleDailyTime}${catchUp}`;
+  if (record.scheduleType === 'watch') return `Watching for new files${catchUp}`;
   return 'Manual only';
 }
 
