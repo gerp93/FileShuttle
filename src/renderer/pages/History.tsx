@@ -11,6 +11,8 @@ import {
   runStatusMeaning,
   RunSummary,
 } from '../../shared/types';
+import { describeUndo, planUndo, summarizeUndoPlan } from '../../shared/undoPlan';
+import { errorMessage } from '../utils/errors';
 
 type Counts = Pick<
   RunSummary,
@@ -35,6 +37,13 @@ interface StandaloneHistoryEntry {
 }
 
 type HistoryEntry = JobHistoryGroup | StandaloneHistoryEntry;
+
+/** Whether a run has anything Undo can act on. An undo run can only be reversed for its moves. */
+function canUndo(run: RunSummary): boolean {
+  if (run.triggerType === 'system' || run.undoneByRunId) return false;
+  if (run.triggerType === 'undo') return run.filesMoved > 0;
+  return run.filesMoved + run.filesCopied + run.filesDeleted + run.filesExtracted + run.filesZipped > 0;
+}
 
 function runMovedFiles(run: Counts): boolean {
   return run.filesMoved + run.filesCopied + run.filesDeleted + run.filesExtracted + run.filesZipped > 0;
@@ -245,7 +254,7 @@ function MappingRunRow({
       <div>
         {isSystem ? null : run.undoneByRunId ? (
           <span className="muted">Undone</span>
-        ) : run.filesMoved > 0 ? (
+        ) : canUndo(run) ? (
           <button className="text" onClick={onUndo}>Undo</button>
         ) : null}
       </div>
@@ -264,7 +273,7 @@ export default function History() {
   const [expanded, setExpanded] = useState<Record<number, FileOutcome[]>>({});
   const [openRuns, setOpenRuns] = useState<Set<number>>(new Set());
   const [openJobs, setOpenJobs] = useState<Set<number>>(new Set());
-  const [confirmUndo, setConfirmUndo] = useState<RunSummary | null>(null);
+  const [confirmUndo, setConfirmUndo] = useState<{ run: RunSummary; lines: string[]; notUndoable: number } | null>(null);
   const [snackbar, setSnackbar] = useState('');
 
   const load = async () => {
@@ -321,10 +330,26 @@ export default function History() {
     setOpenJobs(next);
   };
 
+  // Work out, from the run's recorded files, exactly what Undo will do and say so first.
+  const requestUndo = async (run: RunSummary) => {
+    const detail = await window.fileshuttleAPI.history.getDetail(run.id);
+    const plan = planUndo(detail, run.triggerType === 'undo');
+    setConfirmUndo({ run, lines: describeUndo(summarizeUndoPlan(plan)), notUndoable: plan.notUndoable.length });
+  };
+
   const doUndo = async (run: RunSummary) => {
     setConfirmUndo(null);
-    const result = await window.fileshuttleAPI.history.undo(run.id);
-    setSnackbar(`Undo finished: moved back ${result.filesMoved}, skipped ${result.filesSkipped}, errored ${result.filesErrored}.`);
+    try {
+      const result = await window.fileshuttleAPI.history.undo(run.id);
+      const parts: string[] = [];
+      if (result.filesMoved) parts.push(`restored/moved back ${result.filesMoved}`);
+      if (result.filesDeleted) parts.push(`removed ${result.filesDeleted}`);
+      if (result.filesSkipped) parts.push(`skipped ${result.filesSkipped}`);
+      if (result.filesErrored) parts.push(`errored ${result.filesErrored}`);
+      setSnackbar(`Undo finished: ${parts.length ? parts.join(', ') : 'nothing to do'}. Open the new history entry for details.`);
+    } catch (err) {
+      setSnackbar(`Undo failed: ${errorMessage(err)}`);
+    }
     await load();
   };
 
@@ -408,7 +433,7 @@ export default function History() {
                   isOpen={openRuns.has(run.id)}
                   expanded={expanded[run.id]}
                   onToggle={() => void toggleRun(run)}
-                  onUndo={() => setConfirmUndo(run)}
+                  onUndo={() => void requestUndo(run)}
                 />
               </div>
             );
@@ -440,7 +465,7 @@ export default function History() {
                             isOpen={openRuns.has(run.id)}
                             expanded={expanded[run.id]}
                             onToggle={() => void toggleRun(run)}
-                            onUndo={() => setConfirmUndo(run)}
+                            onUndo={() => void requestUndo(run)}
                           />
                         </div>
                       ))}
@@ -467,13 +492,37 @@ export default function History() {
         <div className="dialog-overlay">
           <div className="dialog">
             <h3>Undo this run?</h3>
-            <p>
-              This will move {confirmUndo.filesMoved} file(s) back to where
-              &quot;{confirmUndo.mappingNameSnapshot}&quot; originally moved them from.
+            <p style={{ marginBottom: 4 }}>
+              Undoing &quot;{confirmUndo.run.mappingNameSnapshot}&quot; will:
+            </p>
+            {confirmUndo.lines.length ? (
+              <ul style={{ marginTop: 4 }}>
+                {confirmUndo.lines.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">Nothing in this run can be undone automatically.</p>
+            )}
+            {confirmUndo.notUndoable > 0 && (
+              <p className="muted">
+                {confirmUndo.notUndoable} item{confirmUndo.notUndoable === 1 ? '' : 's'} can&apos;t be undone
+                automatically and will be left as they are.
+              </p>
+            )}
+            <p className="muted">
+              Nothing is overwritten: a file is only put back if its original spot is free. Restoring from the
+              Recycle Bin only works while the files are still in it (Windows).
             </p>
             <div className="dialog-actions">
               <button className="outline" onClick={() => setConfirmUndo(null)}>Cancel</button>
-              <button className="primary" onClick={() => void doUndo(confirmUndo)}>Undo</button>
+              <button
+                className="primary"
+                disabled={confirmUndo.lines.length === 0}
+                onClick={() => void doUndo(confirmUndo.run)}
+              >
+                Undo
+              </button>
             </div>
           </div>
         </div>

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FileOutcome } from '../../shared/types';
-import { resolveConflict, resolveDestination, runMapping, undoRun } from './mover';
+import { resolveConflict, resolveDestination, runMapping } from './mover';
 import { listTree, makeMapping, makeTempDir, removeDir, writeFile } from './testUtils';
 
 let root: string;
@@ -260,38 +260,6 @@ describe('unzip', () => {
     expect(result.filesExtracted).toBe(0);
     expect(trashed).toEqual([]);
     expect(fs.existsSync(path.join(src, 'broken.zip'))).toBe(true);
-  });
-});
-
-describe('undoRun', () => {
-  it('moves files back to where they came from', async () => {
-    writeFile(path.join(src, 'a.txt'), 'A');
-    const run = await runMapping(makeMapping({ sourcePath: src, destPath: dest }), { trash });
-    expect(listTree(src)).toEqual([]);
-
-    const undo = undoRun(run.fileOutcomes);
-    expect(undo.filesMoved).toBe(1);
-    expect(listTree(src)).toEqual(['a.txt']);
-    expect(listTree(dest)).toEqual([]);
-  });
-
-  it('refuses to clobber a file that has since reappeared at the source', async () => {
-    writeFile(path.join(src, 'a.txt'), 'A');
-    const run = await runMapping(makeMapping({ sourcePath: src, destPath: dest }), { trash });
-    writeFile(path.join(src, 'a.txt'), 'NEWER');
-
-    const undo = undoRun(run.fileOutcomes);
-    expect(undo.filesSkipped).toBe(1);
-    expect(fs.readFileSync(path.join(src, 'a.txt'), 'utf8')).toBe('NEWER');
-    expect(listTree(dest)).toEqual(['a.txt']);
-  });
-
-  it('reports an error when the moved file is gone', async () => {
-    writeFile(path.join(src, 'a.txt'), 'A');
-    const run = await runMapping(makeMapping({ sourcePath: src, destPath: dest }), { trash });
-    fs.rmSync(path.join(dest, 'a.txt'));
-    const undo = undoRun(run.fileOutcomes);
-    expect(undo.filesErrored).toBe(1);
   });
 });
 

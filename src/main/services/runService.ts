@@ -2,7 +2,8 @@ import { Database } from 'sql.js';
 import { computeRunStatus, JobRecord, RunResult } from '../../shared/types';
 import * as repo from '../database/repository';
 import { saveDatabase } from '../database/schema';
-import { runMapping, undoRun } from '../engine/mover';
+import { runMapping } from '../engine/mover';
+import { undoRun } from '../engine/undo';
 
 export function persistDb(db: Database): void {
   saveDatabase(db);
@@ -130,7 +131,10 @@ export function executeUndo(db: Database, runId: number): Promise<RunResult> {
     }
 
     const fileOutcomes = repo.getRunDetail(db, runId);
-    const result = undoRun(fileOutcomes);
+    const result = await undoRun(fileOutcomes, {
+      window: { startedAt: originalRun.startedAt, finishedAt: originalRun.finishedAt },
+      originalWasUndo: originalRun.triggerType === 'undo',
+    });
     const status = computeRunStatus(result);
 
     const undoRunId = repo.recordRun(db, {

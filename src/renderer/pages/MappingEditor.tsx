@@ -212,7 +212,8 @@ export default function MappingEditor() {
       {actionType === 'delete' && (
         <p className="error-text">
           Matching files are moved to the Recycle Bin — not to a destination folder.
-          This cannot be undone from within FileShuttle.
+          On Windows, History → Undo can restore them while they are still in the Recycle
+          Bin; once the bin is emptied they are gone.
         </p>
       )}
 

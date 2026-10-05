@@ -6,9 +6,9 @@ import { FileOutcome, MappingConfig, RunResult } from '../../shared/types';
 import { validateFilters } from '../../shared/validation';
 import { buildRunResult } from '../database/repository';
 import { evaluateFilters, partitionKeepNewest } from './filters';
+import { electronTrash, TrashFn } from './trash';
 
-/** Sends a path to the Recycle Bin. Injected so the engine can run (and be tested) outside Electron. */
-export type TrashFn = (filePath: string) => Promise<void>;
+export type { TrashFn } from './trash';
 
 export interface RunOptions {
   trash?: TrashFn;
@@ -26,11 +26,6 @@ export interface RunOptions {
    */
   backupOverwritten?: boolean;
 }
-
-const electronTrash: TrashFn = async (filePath) => {
-  const { shell } = await import('electron');
-  await shell.trashItem(filePath);
-};
 
 /** Everything an action needs besides the file in front of it. */
 interface RunContext {
@@ -426,7 +421,7 @@ function firstFreeDir(dirPath: string, taken: (p: string) => boolean = fs.exists
  * network drive, etc.) -- the OS can't do an in-place rename across devices.
  * Fall back to copy-then-delete in that case, same as `mv` does.
  */
-function renameOrCopyAcrossDevices(src: string, dest: string): void {
+export function renameOrCopyAcrossDevices(src: string, dest: string): void {
   try {
     fs.renameSync(src, dest);
   } catch (err) {
@@ -469,60 +464,6 @@ function moveOrCopy(
   } catch (err) {
     outcomes.push({ sourcePath: filePath, destPath, outcome: 'error', reason: String(err), sizeBytes: size });
   }
-}
-
-export function undoRun(fileOutcomes: FileOutcome[]): RunResult {
-  const startedAt = new Date();
-  const outcomes: FileOutcome[] = [];
-
-  for (const original of fileOutcomes) {
-    if (original.outcome !== 'moved' || !original.destPath) continue;
-
-    if (!fs.existsSync(original.destPath)) {
-      outcomes.push({
-        sourcePath: original.destPath,
-        destPath: original.sourcePath,
-        outcome: 'error',
-        reason: 'file no longer exists at its recorded destination',
-        sizeBytes: null,
-      });
-      continue;
-    }
-
-    if (fs.existsSync(original.sourcePath)) {
-      outcomes.push({
-        sourcePath: original.destPath,
-        destPath: null,
-        outcome: 'skipped',
-        reason: 'a file already exists at the original source path',
-        sizeBytes: null,
-      });
-      continue;
-    }
-
-    try {
-      fs.mkdirSync(path.dirname(original.sourcePath), { recursive: true });
-      const size = fs.statSync(original.destPath).size;
-      renameOrCopyAcrossDevices(original.destPath, original.sourcePath);
-      outcomes.push({
-        sourcePath: original.destPath,
-        destPath: original.sourcePath,
-        outcome: 'moved',
-        reason: null,
-        sizeBytes: size,
-      });
-    } catch (err) {
-      outcomes.push({
-        sourcePath: original.destPath,
-        destPath: original.sourcePath,
-        outcome: 'error',
-        reason: String(err),
-        sizeBytes: null,
-      });
-    }
-  }
-
-  return buildRunResult(startedAt, new Date(), outcomes);
 }
 
 export function* iterTopLevelEntries(source: string): Generator<string> {
