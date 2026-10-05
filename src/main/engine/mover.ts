@@ -1,4 +1,3 @@
-import AdmZip from 'adm-zip';
 import * as fs from 'fs';
 import * as path from 'path';
 import { normalizeFolder, validateMappingPaths } from '../../shared/pathSafety';
@@ -7,8 +6,30 @@ import { validateFilters } from '../../shared/validation';
 import { buildRunResult } from '../database/repository';
 import { evaluateFilters, partitionKeepNewest } from './filters';
 import { electronTrash, TrashFn } from './trash';
+import {
+  createZip,
+  DEFAULT_UNZIP_LIMITS,
+  extractZipEntries,
+  readZipEntries,
+  resolveEntryTarget,
+  UnsafeArchiveError,
+  UnzipLimits,
+  ZipEntryInfo,
+} from './zipStream';
 
 export type { TrashFn } from './trash';
+export type { UnzipLimits } from './zipStream';
+
+/** Live status of a running mapping, for progress displays. */
+export interface RunProgress {
+  phase: 'scanning' | 'processing';
+  /** Files looked at so far while scanning the source folder. */
+  scanned: number;
+  /** Files handled so far (moved, copied, skipped, ...). */
+  processed: number;
+  /** Files that will be handled, once scanning and filtering have finished. */
+  total: number | null;
+}
 
 export interface RunOptions {
   trash?: TrashFn;
@@ -25,23 +46,45 @@ export interface RunOptions {
    * is left alone and reported as an error rather than silently lost.
    */
   backupOverwritten?: boolean;
+  /** Bounds on what unzip will extract (entry count, total size). */
+  unzipLimits?: UnzipLimits;
+  /** Called (throttled) as the run advances. */
+  onProgress?: (progress: RunProgress) => void;
+  /** Aborting stops the run before the next file; work already done is kept and reported. */
+  signal?: AbortSignal;
 }
+
+const PROGRESS_INTERVAL_MS = 150;
+const STAT_BATCH = 64;
 
 /** Everything an action needs besides the file in front of it. */
 interface RunContext {
   trash: TrashFn;
   dryRun: boolean;
   backupOverwritten: boolean;
+  limits: UnzipLimits;
+  signal?: AbortSignal;
   /**
    * Destinations a dry run has "used". A real run sees its own earlier output
    * on disk (e.g. two zips whose extraction folders collide); a dry run has to
    * remember those itself or it would report conflicts differently.
    */
   claimed: Set<string>;
+  progress: { scanned: number; processed: number; total: number | null };
+  emit: (phase: RunProgress['phase'], force?: boolean) => void;
 }
 
-function exists(ctx: RunContext, p: string): boolean {
-  return fs.existsSync(p) || (ctx.dryRun && ctx.claimed.has(normalizeFolder(p)));
+export async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.promises.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function exists(ctx: RunContext, p: string): Promise<boolean> {
+  return (ctx.dryRun && ctx.claimed.has(normalizeFolder(p))) || pathExists(p);
 }
 
 function claim(ctx: RunContext, p: string): void {
@@ -52,6 +95,27 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function makeContext(options: RunOptions): RunContext {
+  let lastEmit = 0;
+  const ctx: RunContext = {
+    trash: options.trash ?? electronTrash,
+    dryRun: options.dryRun ?? false,
+    backupOverwritten: options.backupOverwritten ?? true,
+    limits: options.unzipLimits ?? DEFAULT_UNZIP_LIMITS,
+    signal: options.signal,
+    claimed: new Set(),
+    progress: { scanned: 0, processed: 0, total: null },
+    emit: (phase, force = false) => {
+      if (!options.onProgress) return;
+      const now = Date.now();
+      if (!force && now - lastEmit < PROGRESS_INTERVAL_MS) return;
+      lastEmit = now;
+      options.onProgress({ phase, ...ctx.progress });
+    },
+  };
+  return ctx;
+}
+
 /**
  * Before an overwrite replaces `existingPath`, sends the old file to the
  * Recycle Bin so the replacement is recoverable. Returns a message when that
@@ -59,7 +123,7 @@ function errorText(err: unknown): string {
  */
 async function backupExisting(ctx: RunContext, existingPath: string): Promise<string | null> {
   if (ctx.dryRun || !ctx.backupOverwritten) return null;
-  if (!fs.existsSync(existingPath)) return null;
+  if (!(await pathExists(existingPath))) return null;
   try {
     await ctx.trash(existingPath);
     return null;
@@ -71,19 +135,24 @@ async function backupExisting(ctx: RunContext, existingPath: string): Promise<st
   }
 }
 
-/** Backs up every existing file that extracting `zip` into `targetDir` would overwrite. */
-async function backupReplacedEntries(ctx: RunContext, zip: AdmZip, targetDir: string): Promise<string | null> {
+/** Backs up every existing file that extracting `entries` into `targetDir` would overwrite. */
+async function backupReplacedEntries(
+  ctx: RunContext,
+  entries: ZipEntryInfo[],
+  targetDir: string
+): Promise<string | null> {
   if (ctx.dryRun || !ctx.backupOverwritten) return null;
-  const root = path.resolve(targetDir);
-  for (const entry of zip.getEntries()) {
-    if (entry.isDirectory) continue;
-    const target = path.resolve(root, entry.entryName.replace(/\\/g, '/').replace(/^\/+/, ''));
-    // adm-zip refuses to write outside the folder, so there is nothing to back up out there either.
-    if (target !== root && !target.startsWith(root + path.sep)) continue;
-    if (fs.existsSync(target) && fs.statSync(target).isFile()) {
-      const failure = await backupExisting(ctx, target);
-      if (failure) return failure;
+  for (const entry of entries) {
+    if (entry.isDirectory || entry.isSymlink) continue;
+    const target = resolveEntryTarget(targetDir, entry.name);
+    if (!target) continue;
+    try {
+      if (!(await fs.promises.stat(target)).isFile()) continue;
+    } catch {
+      continue; // nothing there to replace
     }
+    const failure = await backupExisting(ctx, target);
+    if (failure) return failure;
   }
   return null;
 }
@@ -95,15 +164,11 @@ interface Candidate {
 }
 
 export async function runMapping(mapping: MappingConfig, options: RunOptions = {}): Promise<RunResult> {
-  const ctx: RunContext = {
-    trash: options.trash ?? electronTrash,
-    dryRun: options.dryRun ?? false,
-    backupOverwritten: options.backupOverwritten ?? true,
-    claimed: new Set(),
-  };
+  const ctx = makeContext(options);
   const startedAt = new Date();
   const sourceRoot = mapping.sourcePath;
   const outcomes: FileOutcome[] = [];
+  const finish = () => buildRunResult(startedAt, new Date(), outcomes);
 
   // Mappings are validated when saved, but a database edited by hand, an
   // older build, or an imported file could still hold one that feeds on its
@@ -120,65 +185,53 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
       reason: configProblem,
       sizeBytes: null,
     });
-    return buildRunResult(startedAt, new Date(), outcomes);
+    return finish();
   }
 
-  if (mapping.actionType === 'zip') {
-    for (const entryPath of iterTopLevelEntries(sourceRoot)) {
-      let stat: fs.Stats;
-      try {
-        stat = fs.statSync(entryPath);
-      } catch (err) {
-        outcomes.push({ sourcePath: entryPath, destPath: null, outcome: 'error', reason: String(err), sizeBytes: null });
-        continue;
-      }
+  const isZip = mapping.actionType === 'zip';
+  const candidates: Candidate[] = [];
 
+  // Scan: list the source folder and stat/filter in bounded parallel batches.
+  // Everything here is async, so a huge folder never freezes the app.
+  const found: string[] = [];
+  const entries = isZip ? iterTopLevelEntries(sourceRoot) : iterCandidateFiles(sourceRoot, mapping.recursive);
+  for await (const entryPath of entries) {
+    if (ctx.signal?.aborted) return finish();
+    found.push(entryPath);
+    ctx.progress.scanned = found.length;
+    ctx.emit('scanning');
+  }
+
+  for (let i = 0; i < found.length; i += STAT_BATCH) {
+    if (ctx.signal?.aborted) return finish();
+    const batch = found.slice(i, i + STAT_BATCH);
+    const stats = await Promise.all(
+      batch.map((p) =>
+        fs.promises.stat(p).then(
+          (stat) => ({ stat }),
+          (err: unknown) => ({ err })
+        )
+      )
+    );
+    batch.forEach((entryPath, j) => {
+      const result = stats[j];
+      if ('err' in result) {
+        outcomes.push({ sourcePath: entryPath, destPath: null, outcome: 'error', reason: String(result.err), sizeBytes: null });
+        return;
+      }
+      const { stat } = result;
       const matched = matchesMapping(
         mapping,
         entryPath,
-        { size: stat.isDirectory() ? 0 : stat.size, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs },
+        { size: isZip && stat.isDirectory() ? 0 : stat.size, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs },
         outcomes
       );
-      if (!matched) continue;
-
-      await zipEntry(mapping, mapping.destPath, entryPath, stat, outcomes, ctx);
-    }
-    return buildRunResult(startedAt, new Date(), outcomes);
+      if (matched) candidates.push({ filePath: entryPath, mtimeMs: stat.mtimeMs, stat });
+    });
   }
 
-  const destRoot =
-    mapping.actionType === 'move' || mapping.actionType === 'copy' || mapping.actionType === 'unzip'
-      ? mapping.destPath
-      : null;
-  const candidates: Candidate[] = [];
-
-  for (const filePath of iterCandidateFiles(sourceRoot, mapping.recursive)) {
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(filePath);
-    } catch (err) {
-      outcomes.push({
-        sourcePath: filePath,
-        destPath: null,
-        outcome: 'error',
-        reason: String(err),
-        sizeBytes: null,
-      });
-      continue;
-    }
-
-    const matched = matchesMapping(
-      mapping,
-      filePath,
-      { size: stat.size, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs },
-      outcomes
-    );
-    if (!matched) continue;
-
-    candidates.push({ filePath, mtimeMs: stat.mtimeMs, stat });
-  }
-
-  const keepNewest = mapping.actionType === 'copy' ? null : mapping.keepNewest;
+  // Zip handles every matching top-level entry; there is no keep-newest for it.
+  const keepNewest = mapping.actionType === 'copy' || isZip ? null : mapping.keepNewest;
   const { kept, rest } = partitionKeepNewest(candidates, keepNewest);
 
   for (const file of kept) {
@@ -191,11 +244,28 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
     });
   }
 
+  ctx.progress.total = rest.length;
+  ctx.progress.processed = 0;
+  ctx.emit('processing', true);
+
+  const destRoot =
+    mapping.actionType === 'move' || mapping.actionType === 'copy' || mapping.actionType === 'unzip'
+      ? mapping.destPath
+      : null;
+
   for (const file of rest) {
-    await actOnFile(mapping, sourceRoot, destRoot, file.filePath, file.stat, outcomes, ctx);
+    if (ctx.signal?.aborted) break;
+    if (isZip) {
+      await zipEntry(mapping, mapping.destPath, file.filePath, file.stat, outcomes, ctx);
+    } else {
+      await actOnFile(mapping, sourceRoot, destRoot, file.filePath, file.stat, outcomes, ctx);
+    }
+    ctx.progress.processed += 1;
+    ctx.emit('processing');
   }
 
-  return buildRunResult(startedAt, new Date(), outcomes);
+  ctx.emit('processing', true);
+  return finish();
 }
 
 /**
@@ -254,8 +324,8 @@ async function actOnFile(
 
   const destPath = resolveDestination(sourceRoot, destRoot!, filePath);
   let reason: string | null = null;
-  if (exists(ctx, destPath)) {
-    const resolved = resolveConflict(destPath, mapping.conflictPolicy, (p) => exists(ctx, p));
+  if (await exists(ctx, destPath)) {
+    const resolved = await resolveConflict(destPath, mapping.conflictPolicy, (p) => exists(ctx, p));
     if (resolved === null) {
       outcomes.push({
         sourcePath: filePath,
@@ -268,7 +338,7 @@ async function actOnFile(
     }
     reason = `conflict_${mapping.conflictPolicy}`;
     if (resolved !== destPath) {
-      moveOrCopy(filePath, resolved, mapping.actionType, outcomes, reason, stat.size, ctx);
+      await moveOrCopy(filePath, resolved, mapping.actionType, outcomes, reason, stat.size, ctx);
       return;
     }
 
@@ -280,7 +350,7 @@ async function actOnFile(
     }
   }
 
-  moveOrCopy(filePath, destPath, mapping.actionType, outcomes, reason, stat.size, ctx);
+  await moveOrCopy(filePath, destPath, mapping.actionType, outcomes, reason, stat.size, ctx);
 }
 
 /** Extracts a matched .zip file into a same-named subfolder of destRoot, then trashes the zip. */
@@ -300,7 +370,7 @@ async function extractZipEntry(
 
   let finalDir = targetDir;
   let reason: string | null = null;
-  if (exists(ctx, targetDir)) {
+  if (await exists(ctx, targetDir)) {
     if (mapping.conflictPolicy === 'skip') {
       outcomes.push({
         sourcePath: filePath,
@@ -313,31 +383,42 @@ async function extractZipEntry(
     }
     reason = `conflict_${mapping.conflictPolicy}`;
     if (mapping.conflictPolicy === 'auto_rename') {
-      finalDir = firstFreeDir(targetDir, (p) => exists(ctx, p));
+      finalDir = await firstFreeDir(targetDir, (p) => exists(ctx, p));
     }
   }
 
+  const folderIsNew = !(await pathExists(finalDir));
+  let opened: Awaited<ReturnType<typeof readZipEntries>> | null = null;
   try {
-    // Opening the archive only reads it, and in a preview it surfaces a
-    // corrupt zip before the real run does.
-    const zip = new AdmZip(filePath);
+    // Reading the table of contents is read-only. In a preview it still
+    // surfaces a corrupt or oversized archive before the real run does.
+    opened = await readZipEntries(filePath, ctx.limits);
     if (ctx.dryRun) {
       claim(ctx, finalDir);
     } else {
       if (mapping.conflictPolicy === 'overwrite' && finalDir === targetDir) {
-        const failure = await backupReplacedEntries(ctx, zip, finalDir);
+        const failure = await backupReplacedEntries(ctx, opened.entries, finalDir);
         if (failure) {
           outcomes.push({ sourcePath: filePath, destPath: finalDir, outcome: 'error', reason: failure, sizeBytes: stat.size });
           return;
         }
       }
-      fs.mkdirSync(finalDir, { recursive: true });
-      zip.extractAllTo(finalDir, true);
+      await extractZipEntries(opened.zipfile, opened.entries, finalDir, ctx.limits, ctx.signal);
     }
     outcomes.push({ sourcePath: filePath, destPath: finalDir, outcome: 'extracted', reason, sizeBytes: stat.size });
   } catch (err) {
-    outcomes.push({ sourcePath: filePath, destPath: finalDir, outcome: 'error', reason: String(err), sizeBytes: stat.size });
+    // A folder we just created for this archive holds only a partial extraction; don't leave it behind.
+    if (!ctx.dryRun && folderIsNew) await fs.promises.rm(finalDir, { recursive: true, force: true });
+    outcomes.push({
+      sourcePath: filePath,
+      destPath: finalDir,
+      outcome: 'error',
+      reason: err instanceof UnsafeArchiveError ? `Not extracted: ${errorText(err)}` : String(err),
+      sizeBytes: stat.size,
+    });
     return;
+  } finally {
+    opened?.close();
   }
 
   if (ctx.dryRun) return;
@@ -370,8 +451,8 @@ async function zipEntry(
 
   let finalZip = targetZip;
   let reason: string | null = null;
-  if (exists(ctx, targetZip)) {
-    const resolved = resolveConflict(targetZip, mapping.conflictPolicy, (p) => exists(ctx, p));
+  if (await exists(ctx, targetZip)) {
+    const resolved = await resolveConflict(targetZip, mapping.conflictPolicy, (p) => exists(ctx, p));
     if (resolved === null) {
       outcomes.push({ sourcePath: entryPath, destPath: null, outcome: 'skipped', reason: 'conflict_skip', sizeBytes: size });
       return;
@@ -391,14 +472,8 @@ async function zipEntry(
     if (ctx.dryRun) {
       claim(ctx, finalZip);
     } else {
-      fs.mkdirSync(destRoot, { recursive: true });
-      const zip = new AdmZip();
-      if (stat.isDirectory()) {
-        zip.addLocalFolder(entryPath, name);
-      } else {
-        zip.addLocalFile(entryPath);
-      }
-      zip.writeZip(finalZip);
+      await fs.promises.mkdir(destRoot, { recursive: true });
+      await createZip(entryPath, name, stat.isDirectory(), finalZip);
     }
     outcomes.push({ sourcePath: entryPath, destPath: finalZip, outcome: 'zipped', reason, sizeBytes: size });
   } catch (err) {
@@ -406,34 +481,34 @@ async function zipEntry(
   }
 }
 
-function firstFreeDir(dirPath: string, taken: (p: string) => boolean = fs.existsSync): string {
+async function firstFreeDir(dirPath: string, taken: (p: string) => Promise<boolean>): Promise<string> {
   let n = 1;
   while (true) {
     const candidate = `${dirPath} (${n})`;
-    if (!taken(candidate)) return candidate;
+    if (!(await taken(candidate))) return candidate;
     n += 1;
   }
 }
 
 /**
- * fs.renameSync fails with EXDEV when source and destination are on different
+ * rename fails with EXDEV when source and destination are on different
  * drives/volumes (common here: moving into a different drive letter, a mapped
  * network drive, etc.) -- the OS can't do an in-place rename across devices.
  * Fall back to copy-then-delete in that case, same as `mv` does.
  */
-export function renameOrCopyAcrossDevices(src: string, dest: string): void {
+export async function renameOrCopyAcrossDevices(src: string, dest: string): Promise<void> {
   try {
-    fs.renameSync(src, dest);
+    await fs.promises.rename(src, dest);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
-    const stat = fs.statSync(src);
-    fs.copyFileSync(src, dest);
-    fs.utimesSync(dest, stat.atime, stat.mtime);
-    fs.rmSync(src);
+    const stat = await fs.promises.stat(src);
+    await fs.promises.copyFile(src, dest);
+    await fs.promises.utimes(dest, stat.atime, stat.mtime);
+    await fs.promises.rm(src);
   }
 }
 
-function moveOrCopy(
+async function moveOrCopy(
   filePath: string,
   destPath: string,
   actionType: MappingConfig['actionType'],
@@ -441,17 +516,18 @@ function moveOrCopy(
   reason: string | null,
   size: number,
   ctx: RunContext
-): void {
+): Promise<void> {
   try {
     if (ctx.dryRun) {
       claim(ctx, destPath);
     } else {
-      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
       if (actionType === 'copy') {
-        fs.copyFileSync(filePath, destPath);
-        fs.utimesSync(destPath, fs.statSync(filePath).atime, fs.statSync(filePath).mtime);
+        await fs.promises.copyFile(filePath, destPath);
+        const source = await fs.promises.stat(filePath);
+        await fs.promises.utimes(destPath, source.atime, source.mtime);
       } else {
-        renameOrCopyAcrossDevices(filePath, destPath);
+        await renameOrCopyAcrossDevices(filePath, destPath);
       }
     }
     outcomes.push({
@@ -466,19 +542,19 @@ function moveOrCopy(
   }
 }
 
-export function* iterTopLevelEntries(source: string): Generator<string> {
-  if (!fs.existsSync(source)) return;
-  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+export async function* iterTopLevelEntries(source: string): AsyncGenerator<string> {
+  if (!(await pathExists(source))) return;
+  for (const entry of await fs.promises.readdir(source, { withFileTypes: true })) {
     yield path.join(source, entry.name);
   }
 }
 
-export function* iterCandidateFiles(source: string, recursive: boolean): Generator<string> {
-  if (!fs.existsSync(source)) return;
+export async function* iterCandidateFiles(source: string, recursive: boolean): AsyncGenerator<string> {
+  if (!(await pathExists(source))) return;
   if (recursive) {
     yield* walkRecursive(source);
   } else {
-    for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    for (const entry of await fs.promises.readdir(source, { withFileTypes: true })) {
       if (entry.isFile()) {
         yield path.join(source, entry.name);
       }
@@ -486,8 +562,8 @@ export function* iterCandidateFiles(source: string, recursive: boolean): Generat
   }
 }
 
-function* walkRecursive(dir: string): Generator<string> {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+async function* walkRecursive(dir: string): AsyncGenerator<string> {
+  for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isFile()) {
       yield fullPath;
@@ -502,25 +578,25 @@ export function resolveDestination(sourceRoot: string, destRoot: string, filePat
   return path.join(destRoot, relative);
 }
 
-export function resolveConflict(
+export async function resolveConflict(
   destPath: string,
   policy: string,
-  taken: (p: string) => boolean = fs.existsSync
-): string | null {
+  taken: (p: string) => Promise<boolean> = pathExists
+): Promise<string | null> {
   if (policy === 'overwrite') return destPath;
   if (policy === 'skip') return null;
   if (policy === 'auto_rename') return firstFreePath(destPath, taken);
   throw new Error(`Unknown conflict policy: ${policy}`);
 }
 
-function firstFreePath(destPath: string, taken: (p: string) => boolean): string {
+async function firstFreePath(destPath: string, taken: (p: string) => Promise<boolean>): Promise<string> {
   const dir = path.dirname(destPath);
   const ext = path.extname(destPath);
   const stem = path.basename(destPath, ext);
   let n = 1;
   while (true) {
     const candidate = path.join(dir, `${stem} (${n})${ext}`);
-    if (!taken(candidate)) return candidate;
+    if (!(await taken(candidate))) return candidate;
     n += 1;
   }
 }

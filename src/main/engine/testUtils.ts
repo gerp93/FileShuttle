@@ -47,3 +47,32 @@ export function makeMapping(overrides: Partial<MappingConfig> & Pick<MappingConf
     ...overrides,
   };
 }
+
+/**
+ * Writes a zip whose single entry has `unsafeName` as its stored name (e.g.
+ * "../../evil.txt"). Zip libraries refuse to *create* such entries, so build a
+ * normal archive under a same-length placeholder and patch the name bytes in
+ * both the local header and the central directory.
+ */
+export function writeZipWithRawEntryName(zipPath: string, unsafeName: string, content = 'x'): void {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const AdmZip = require('adm-zip');
+  const placeholder = 'p'.repeat(unsafeName.length);
+  const zip = new AdmZip();
+  zip.addFile(placeholder, Buffer.from(content));
+  const bytes: Buffer = zip.toBuffer();
+  const needle = Buffer.from(placeholder);
+  const replacement = Buffer.from(unsafeName);
+  let from = 0;
+  let patched = 0;
+  for (;;) {
+    const at = bytes.indexOf(needle, from);
+    if (at === -1) break;
+    replacement.copy(bytes, at);
+    patched += 1;
+    from = at + needle.length;
+  }
+  if (patched < 2) throw new Error('expected to patch the entry name in the local header and central directory');
+  fs.mkdirSync(path.dirname(zipPath), { recursive: true });
+  fs.writeFileSync(zipPath, bytes);
+}

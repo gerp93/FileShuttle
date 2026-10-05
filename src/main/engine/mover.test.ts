@@ -4,7 +4,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FileOutcome } from '../../shared/types';
 import { resolveConflict, resolveDestination, runMapping } from './mover';
-import { listTree, makeMapping, makeTempDir, removeDir, writeFile } from './testUtils';
+import { listTree, makeMapping, makeTempDir, removeDir, writeFile, writeZipWithRawEntryName } from './testUtils';
 
 let root: string;
 let src: string;
@@ -129,8 +129,8 @@ describe('conflict policies', () => {
 });
 
 describe('resolveConflict / resolveDestination', () => {
-  it('rejects an unknown policy', () => {
-    expect(() => resolveConflict('/x', 'bogus')).toThrow(/Unknown conflict policy/);
+  it('rejects an unknown policy', async () => {
+    await expect(resolveConflict('/x', 'bogus')).rejects.toThrow(/Unknown conflict policy/);
   });
 
   it('maps a source file to the same relative path under the destination', () => {
@@ -241,13 +241,19 @@ describe('unzip', () => {
   });
 
   it('does not allow an entry to escape the extraction folder', async () => {
-    makeZip(path.join(src, 'evil.zip'), { '../../escaped.txt': 'pwned' });
-    await runMapping(
+    writeZipWithRawEntryName(path.join(src, 'evil.zip'), '../../escaped.txt', 'pwned');
+    const result = await runMapping(
       makeMapping({ sourcePath: src, destPath: dest, actionType: 'unzip' }),
       { trash }
     );
     expect(fs.existsSync(path.join(root, 'escaped.txt'))).toBe(false);
     expect(fs.existsSync(path.join(dest, '..', 'escaped.txt'))).toBe(false);
+    // The whole archive is refused rather than quietly "fixed", and the zip is kept.
+    expect(result.filesErrored).toBe(1);
+    expect(result.fileOutcomes[0].reason).toMatch(/unsafe path/);
+    expect(trashed).toEqual([]);
+    expect(fs.existsSync(path.join(src, 'evil.zip'))).toBe(true);
+    expect(fs.existsSync(path.join(dest, 'evil'))).toBe(false);
   });
 
   it('reports an error and keeps the zip when the archive is corrupt', async () => {

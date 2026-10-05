@@ -14,8 +14,10 @@ import {
   RunAllSummary,
   RunResult,
   RunStats,
+  RunProgressEvent,
   RunSummary,
   StepPreview,
+  UnzipLimitsSetting,
   UpdateCheckResult,
   UpdateJobInput,
   UpdateMappingInput,
@@ -45,6 +47,10 @@ export interface FileShuttleAPI {
     getStats: (id: number) => Promise<RunStats>;
     preview: (id: number) => Promise<JobPreview>;
     run: (id: number) => Promise<RunResult>;
+    cancel: (id: number) => Promise<boolean>;
+    getActive: () => Promise<RunProgressEvent[]>;
+    /** Subscribe to live progress for all runs. Returns an unsubscribe function. */
+    onProgress: (callback: (event: RunProgressEvent) => void) => () => void;
     runAll: () => Promise<RunAllSummary>;
   };
   history: {
@@ -62,6 +68,8 @@ export interface FileShuttleAPI {
     setLogRetention: (id: LogRetentionId) => Promise<PurgeResult>;
     getOverwriteBackup: () => Promise<boolean>;
     setOverwriteBackup: (enabled: boolean) => Promise<void>;
+    getUnzipLimits: () => Promise<UnzipLimitsSetting>;
+    setUnzipLimits: (limits: UnzipLimitsSetting) => Promise<void>;
   };
   dialogs: {
     pickFolder: (title: string) => Promise<string | null>;
@@ -108,6 +116,15 @@ const api: FileShuttleAPI = {
     getStats: (id) => ipcRenderer.invoke('jobs:getStats', id),
     preview: (id) => ipcRenderer.invoke('jobs:preview', id),
     run: (id) => ipcRenderer.invoke('jobs:run', id),
+    cancel: (id) => ipcRenderer.invoke('jobs:cancel', id),
+    getActive: () => ipcRenderer.invoke('jobs:getActive'),
+    onProgress: (callback) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: RunProgressEvent) => callback(payload);
+      ipcRenderer.on('run:progress', handler);
+      return () => {
+        ipcRenderer.removeListener('run:progress', handler);
+      };
+    },
     runAll: () => ipcRenderer.invoke('jobs:runAll'),
   },
   history: {
@@ -125,6 +142,8 @@ const api: FileShuttleAPI = {
     setLogRetention: (id) => ipcRenderer.invoke('settings:setLogRetention', id),
     getOverwriteBackup: () => ipcRenderer.invoke('settings:getOverwriteBackup'),
     setOverwriteBackup: (enabled) => ipcRenderer.invoke('settings:setOverwriteBackup', enabled),
+    getUnzipLimits: () => ipcRenderer.invoke('settings:getUnzipLimits'),
+    setUnzipLimits: (limits) => ipcRenderer.invoke('settings:setUnzipLimits', limits),
   },
   dialogs: {
     pickFolder: (title) => ipcRenderer.invoke('dialogs:pickFolder', title),

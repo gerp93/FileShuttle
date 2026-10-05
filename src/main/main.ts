@@ -16,7 +16,14 @@ import {
   resetToDefaultDbPath,
 } from './dbLocation';
 import { logStartupStep, resetStartupLog } from './startupLog';
-import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
+import {
+  cancelJob,
+  executeAllEnabledJobs,
+  executeJob,
+  executeUndo,
+  getActiveRuns,
+  setRunProgressListener,
+} from './services/runService';
 import { inputToConfig, previewJob, previewMapping } from './services/previewService';
 import { validateMappingInput } from '../shared/validation';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
@@ -30,9 +37,11 @@ import {
   LogRetentionId,
   RunAllSummary,
   RunResult,
+  UnzipLimitsSetting,
   UpdateCheckResult,
   UpdateJobInput,
   UpdateMappingInput,
+  validateUnzipLimits,
 } from '../shared/types';
 
 pinUserDataPath();
@@ -422,13 +431,13 @@ function registerIPCHandlers(): void {
   ipcMain.handle('mappings:preview', async (_, id: number) => {
     const mapping = repo.getMapping(db!, id);
     if (!mapping) throw new Error(`No mapping with id ${id}`);
-    return previewMapping(repo.toMappingConfig(mapping));
+    return previewMapping(repo.toMappingConfig(mapping), { unzipLimits: repo.getUnzipLimits(db!) });
   });
 
   // Previews the editor's current, possibly unsaved, form values.
   ipcMain.handle('mappings:previewInput', async (_, input: CreateMappingInput) => {
     assertValidMapping(input);
-    return previewMapping(inputToConfig(input));
+    return previewMapping(inputToConfig(input), { unzipLimits: repo.getUnzipLimits(db!) });
   });
 
   ipcMain.handle('mappings:listJobsUsing', (_, id: number) => repo.listJobsUsingMapping(db!, id));
@@ -479,6 +488,17 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('jobs:preview', (_, id: number) => previewJob(db!, id));
 
+  ipcMain.handle('jobs:cancel', (_, id: number) => cancelJob(id));
+
+  ipcMain.handle('jobs:getActive', () => getActiveRuns());
+
+  // Progress for every run, manual or scheduled, goes to whichever windows are open.
+  setRunProgressListener((event) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('run:progress', event);
+    }
+  });
+
   ipcMain.handle('jobs:run', async (_, id: number): Promise<RunResult> => {
     return executeJob(db!, id, 'manual');
   });
@@ -522,6 +542,15 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('settings:setOverwriteBackup', (_, enabled: boolean) => {
     repo.setOverwriteBackup(db!, enabled);
+    saveDatabase(db!);
+  });
+
+  ipcMain.handle('settings:getUnzipLimits', () => repo.getUnzipLimitsSetting(db!));
+
+  ipcMain.handle('settings:setUnzipLimits', (_, limits: UnzipLimitsSetting) => {
+    const problem = validateUnzipLimits(limits);
+    if (problem) throw new Error(problem);
+    repo.setUnzipLimitsSetting(db!, limits);
     saveDatabase(db!);
   });
 

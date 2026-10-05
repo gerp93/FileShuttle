@@ -15,8 +15,10 @@ import type {
   RunAllSummary,
   RunResult,
   RunStats,
+  RunProgressEvent,
   RunSummary,
   StepPreview,
+  UnzipLimitsSetting,
   UpdateCheckResult,
   UpdateJobInput,
   UpdateMappingInput,
@@ -46,6 +48,10 @@ interface FileShuttleAPI {
     getStats: (id: number) => Promise<RunStats>;
     preview: (id: number) => Promise<JobPreview>;
     run: (id: number) => Promise<RunResult>;
+    cancel: (id: number) => Promise<boolean>;
+    getActive: () => Promise<RunProgressEvent[]>;
+    /** Subscribe to live progress for all runs. Returns an unsubscribe function. */
+    onProgress: (callback: (event: RunProgressEvent) => void) => () => void;
     runAll: () => Promise<RunAllSummary>;
   };
   history: {
@@ -63,6 +69,8 @@ interface FileShuttleAPI {
     setLogRetention: (id: LogRetentionId) => Promise<PurgeResult>;
     getOverwriteBackup: () => Promise<boolean>;
     setOverwriteBackup: (enabled: boolean) => Promise<void>;
+    getUnzipLimits: () => Promise<UnzipLimitsSetting>;
+    setUnzipLimits: (limits: UnzipLimitsSetting) => Promise<void>;
   };
   dialogs: {
     pickFolder: (title: string) => Promise<string | null>;

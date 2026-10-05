@@ -8,13 +8,13 @@ import {
   StepPreview,
 } from '../../shared/types';
 import * as repo from '../database/repository';
-import { runMapping } from '../engine/mover';
+import { runMapping, UnzipLimits } from '../engine/mover';
 
 const ACTIONABLE: ReadonlySet<FileOutcome['outcome']> = new Set(['moved', 'copied', 'deleted', 'zipped', 'extracted']);
 
 /** Dry-runs one mapping: nothing on disk changes and nothing is written to run history. */
-export async function previewMapping(config: MappingConfig): Promise<StepPreview> {
-  const result = await runMapping(config, { dryRun: true });
+export async function previewMapping(config: MappingConfig, options: { unzipLimits?: UnzipLimits } = {}): Promise<StepPreview> {
+  const result = await runMapping(config, { dryRun: true, unzipLimits: options.unzipLimits });
   const totalOutcomes = result.fileOutcomes.length;
   const totalBytes = result.fileOutcomes.reduce(
     (sum, file) => (ACTIONABLE.has(file.outcome) ? sum + (file.sizeBytes ?? 0) : sum),
@@ -63,7 +63,7 @@ export async function previewJob(db: Database, jobId: number): Promise<JobPrevie
   const steps: StepPreview[] = [];
   for (const mapping of job.steps) {
     if (!mapping.enabled) continue;
-    steps.push(await previewMapping(repo.toMappingConfig(mapping)));
+    steps.push(await previewMapping(repo.toMappingConfig(mapping), { unzipLimits: repo.getUnzipLimits(db) }));
   }
   return { jobId: job.id, jobName: job.name, steps };
 }

@@ -1,8 +1,8 @@
 import { Database } from 'sql.js';
-import { computeRunStatus, JobRecord, RunResult } from '../../shared/types';
+import { computeRunStatus, JobRecord, RunProgressEvent, RunResult } from '../../shared/types';
 import * as repo from '../database/repository';
 import { saveDatabase } from '../database/schema';
-import { runMapping } from '../engine/mover';
+import { RunProgress, runMapping } from '../engine/mover';
 import { undoRun } from '../engine/undo';
 
 export function persistDb(db: Database): void {
@@ -22,8 +22,10 @@ export class JobAlreadyRunningError extends Error {
 // mis-resolved). So:
 //   - a given job can only be queued/running once at a time, and
 //   - all runs (and undos) execute one after another, never in parallel.
-const activeJobIds = new Set<number>();
+const activeJobs = new Map<number, AbortController>();
+const lastProgress = new Map<number, RunProgressEvent>();
 let queueTail: Promise<unknown> = Promise.resolve();
+let progressListener: ((event: RunProgressEvent) => void) | null = null;
 
 function runExclusive<T>(task: () => Promise<T>): Promise<T> {
   const result = queueTail.then(task, task);
@@ -32,7 +34,31 @@ function runExclusive<T>(task: () => Promise<T>): Promise<T> {
 }
 
 export function isJobActive(jobId: number): boolean {
-  return activeJobIds.has(jobId);
+  return activeJobs.has(jobId);
+}
+
+/** Registers the one place progress events go (the main process forwards them to the window). */
+export function setRunProgressListener(listener: ((event: RunProgressEvent) => void) | null): void {
+  progressListener = listener;
+}
+
+/** Jobs that are queued or running right now, with their latest progress. */
+export function getActiveRuns(): RunProgressEvent[] {
+  return [...activeJobs.keys()].map((jobId) => lastProgress.get(jobId)).filter((e): e is RunProgressEvent => !!e);
+}
+
+function publish(event: RunProgressEvent): void {
+  if (event.phase === 'finished') lastProgress.delete(event.jobId);
+  else lastProgress.set(event.jobId, event);
+  progressListener?.(event);
+}
+
+/** Asks a queued or running job to stop before its next file. Work already done is kept. */
+export function cancelJob(jobId: number): boolean {
+  const controller = activeJobs.get(jobId);
+  if (!controller) return false;
+  controller.abort();
+  return true;
 }
 
 export async function executeJob(
@@ -40,37 +66,63 @@ export async function executeJob(
   jobId: number,
   triggerType: 'manual' | 'scheduled'
 ): Promise<RunResult> {
-  if (activeJobIds.has(jobId)) {
+  if (activeJobs.has(jobId)) {
     throw new JobAlreadyRunningError(jobId);
   }
-  activeJobIds.add(jobId);
+  const controller = new AbortController();
+  activeJobs.set(jobId, controller);
+  const blank = { jobId, jobName: '', stepIndex: 0, stepCount: 0, stepName: '', scanned: 0, processed: 0, total: null };
+  publish({ ...blank, phase: 'queued' });
   try {
     return await runExclusive(async () => {
       const job = repo.getJob(db, jobId);
       if (!job) {
         throw new Error(`No job with id ${jobId}`);
       }
-      const results = await runJobSteps(db, job, triggerType);
-      return aggregateResults(results);
+      if (controller.signal.aborted) return { ...aggregateResults([]), cancelled: true };
+      const results = await runJobSteps(db, job, triggerType, controller.signal);
+      const aggregated = aggregateResults(results);
+      return controller.signal.aborted ? { ...aggregated, cancelled: true } : aggregated;
     });
   } finally {
-    activeJobIds.delete(jobId);
+    activeJobs.delete(jobId);
+    publish({ ...blank, phase: 'finished' });
   }
 }
 
 async function runJobSteps(
   db: Database,
   job: JobRecord,
-  triggerType: 'manual' | 'scheduled'
+  triggerType: 'manual' | 'scheduled',
+  signal: AbortSignal
 ): Promise<RunResult[]> {
   const results: RunResult[] = [];
   let triggeredByRunId: number | null = null;
+  const steps = job.steps.filter((step) => step.enabled);
 
-  for (const mapping of job.steps) {
-    if (!mapping.enabled) continue;
-    // Read per step so flipping the setting takes effect for the next step.
+  for (const [index, mapping] of steps.entries()) {
+    if (signal.aborted) break;
+    // Read per step so flipping a setting takes effect for the next step.
     const backupOverwritten = repo.getOverwriteBackup(db);
-    const result = await runMapping(repo.toMappingConfig(mapping), { backupOverwritten });
+    const unzipLimits = repo.getUnzipLimits(db);
+    const progress = (phase: 'scanning' | 'processing', p: RunProgress) =>
+      publish({
+        jobId: job.id,
+        jobName: job.name,
+        phase,
+        stepIndex: index + 1,
+        stepCount: steps.length,
+        stepName: mapping.name,
+        scanned: p.scanned,
+        processed: p.processed,
+        total: p.total,
+      });
+    const result = await runMapping(repo.toMappingConfig(mapping), {
+      backupOverwritten,
+      unzipLimits,
+      signal,
+      onProgress: (p) => progress(p.phase, p),
+    });
     const status = computeRunStatus(result);
     const runId = repo.recordRun(db, {
       mappingId: mapping.id,

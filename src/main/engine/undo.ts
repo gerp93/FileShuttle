@@ -3,7 +3,7 @@ import * as path from 'path';
 import { planUndo, UndoAction } from '../../shared/undoPlan';
 import { FileOutcome, RunResult } from '../../shared/types';
 import { buildRunResult } from '../database/repository';
-import { renameOrCopyAcrossDevices } from './mover';
+import { pathExists, renameOrCopyAcrossDevices } from './mover';
 import { restoreFromRecycleBin, RestoreFn, RestoreRequest, RestoreResult } from './recycleBin';
 import { electronTrash, TrashFn } from './trash';
 
@@ -109,14 +109,14 @@ export async function undoRun(fileOutcomes: FileOutcome[], options: UndoOptions 
     }
 
     if (action.kind === 'move_back') {
-      if (undoMoveBack(original, outcomes) && action.restoreReplaced) replacedToRestore.push(action);
+      if ((await undoMoveBack(original, outcomes)) && action.restoreReplaced) replacedToRestore.push(action);
       continue;
     }
 
     if (action.kind === 'remove_extracted') {
       const zipResult = firstResults.get(original.sourcePath);
       // "blocked" with the zip present means it was already put back by hand.
-      const zipBack = zipResult?.status === 'restored' || (zipResult?.status === 'blocked' && fs.existsSync(original.sourcePath));
+      const zipBack = zipResult?.status === 'restored' || (zipResult?.status === 'blocked' && (await pathExists(original.sourcePath)));
       if (!zipBack) {
         outcomes.push({
           sourcePath: original.destPath!,
@@ -137,14 +137,14 @@ export async function undoRun(fileOutcomes: FileOutcome[], options: UndoOptions 
     const label = action.kind === 'remove_copy' ? 'removed the copy' : 'removed the archive';
     const target = original.destPath!;
 
-    if (action.restoreReplaced && fs.existsSync(target)) {
+    if (action.restoreReplaced && (await pathExists(target))) {
       // The replaced file is in the Recycle Bin under this very path. If we
       // binned the copy first, the two would be indistinguishable (the bin
       // only keeps one-second timestamps), so move the copy out of the way,
       // restore the old file into the freed path, and only then bin the copy.
       const aside = `${target}.fileshuttle-undo-${Date.now()}-${asides.length}`;
       try {
-        fs.renameSync(target, aside);
+        await fs.promises.rename(target, aside);
         asides.push({ aside, target, label, sizeBytes: original.sizeBytes });
         replacedToRestore.push(action);
       } catch (err) {
@@ -201,7 +201,7 @@ export async function undoRun(fileOutcomes: FileOutcome[], options: UndoOptions 
     } catch (err) {
       // Put it back rather than leave a stray ".fileshuttle-undo-…" file behind.
       try {
-        if (!fs.existsSync(target)) fs.renameSync(aside, target);
+        if (!(await pathExists(target))) await fs.promises.rename(aside, target);
       } catch {
         // best effort; the message below tells the user where it is
       }
@@ -219,11 +219,11 @@ export async function undoRun(fileOutcomes: FileOutcome[], options: UndoOptions 
 }
 
 /** Moves a moved file back. Returns true when it ended up back at its original path. */
-function undoMoveBack(original: FileOutcome, outcomes: FileOutcome[]): boolean {
+async function undoMoveBack(original: FileOutcome, outcomes: FileOutcome[]): Promise<boolean> {
   const from = original.destPath!;
   const to = original.sourcePath;
 
-  if (!fs.existsSync(from)) {
+  if (!(await pathExists(from))) {
     outcomes.push({
       sourcePath: from,
       destPath: to,
@@ -234,7 +234,7 @@ function undoMoveBack(original: FileOutcome, outcomes: FileOutcome[]): boolean {
     return false;
   }
 
-  if (fs.existsSync(to)) {
+  if (await pathExists(to)) {
     outcomes.push({
       sourcePath: from,
       destPath: null,
@@ -246,9 +246,9 @@ function undoMoveBack(original: FileOutcome, outcomes: FileOutcome[]): boolean {
   }
 
   try {
-    fs.mkdirSync(path.dirname(to), { recursive: true });
-    const size = fs.statSync(from).size;
-    renameOrCopyAcrossDevices(from, to);
+    await fs.promises.mkdir(path.dirname(to), { recursive: true });
+    const size = (await fs.promises.stat(from)).size;
+    await renameOrCopyAcrossDevices(from, to);
     outcomes.push({ sourcePath: from, destPath: to, outcome: 'moved', reason: null, sizeBytes: size });
     return true;
   } catch (err) {
@@ -265,7 +265,7 @@ async function removeCreated(
   trash: TrashFn,
   outcomes: FileOutcome[]
 ): Promise<boolean> {
-  if (!fs.existsSync(target)) {
+  if (!(await pathExists(target))) {
     outcomes.push({
       sourcePath: target,
       destPath: null,

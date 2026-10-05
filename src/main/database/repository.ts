@@ -2,6 +2,7 @@ import { Database } from 'sql.js';
 import {
   CreateJobInput,
   CreateMappingInput,
+  DEFAULT_UNZIP_LIMITS_SETTING,
   FileOutcome,
   FilterRule,
   HistoryListFilter,
@@ -13,7 +14,9 @@ import {
   RunStats,
   RunSummary,
   UpdateJobInput,
+  UnzipLimitsSetting,
   UpdateMappingInput,
+  validateUnzipLimits,
 } from '../../shared/types';
 import { lastInsertId, queryAll, queryOne, run, toBool, toInt } from './dbHelpers';
 
@@ -573,4 +576,30 @@ export function getOverwriteBackup(db: Database): boolean {
 
 export function setOverwriteBackup(db: Database, enabled: boolean): void {
   setSetting(db, OVERWRITE_BACKUP_KEY, enabled ? '1' : '0');
+}
+
+const UNZIP_MAX_ENTRIES_KEY = 'unzip_max_entries';
+const UNZIP_MAX_GB_KEY = 'unzip_max_total_gb';
+
+export function getUnzipLimitsSetting(db: Database): UnzipLimitsSetting {
+  const entries = Number(getSetting(db, UNZIP_MAX_ENTRIES_KEY, null));
+  const gb = Number(getSetting(db, UNZIP_MAX_GB_KEY, null));
+  const stored: UnzipLimitsSetting = {
+    maxEntries: entries || DEFAULT_UNZIP_LIMITS_SETTING.maxEntries,
+    maxTotalGB: gb || DEFAULT_UNZIP_LIMITS_SETTING.maxTotalGB,
+  };
+  return validateUnzipLimits(stored) ? DEFAULT_UNZIP_LIMITS_SETTING : stored;
+}
+
+export function setUnzipLimitsSetting(db: Database, limits: UnzipLimitsSetting): void {
+  const problem = validateUnzipLimits(limits);
+  if (problem) throw new Error(problem);
+  setSetting(db, UNZIP_MAX_ENTRIES_KEY, String(limits.maxEntries));
+  setSetting(db, UNZIP_MAX_GB_KEY, String(limits.maxTotalGB));
+}
+
+/** The settings form of the limits, in the units the engine uses. */
+export function getUnzipLimits(db: Database): { maxEntries: number; maxTotalBytes: number } {
+  const { maxEntries, maxTotalGB } = getUnzipLimitsSetting(db);
+  return { maxEntries, maxTotalBytes: Math.floor(maxTotalGB * 1024 ** 3) };
 }

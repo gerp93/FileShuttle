@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { isDestructiveMapping, JobPreview, JobRecord, RunStats } from '../../shared/types';
+import { isDestructiveMapping, JobPreview, JobRecord, RunProgressEvent, RunStats } from '../../shared/types';
 import { errorMessage } from '../utils/errors';
 import PreviewDialog from './PreviewDialog';
 
@@ -24,6 +24,13 @@ function relativeTime(iso: string): string {
   return when.toISOString().slice(0, 10);
 }
 
+function progressLine(p: RunProgressEvent): string {
+  if (p.phase === 'queued') return 'Waiting for another job to finish…';
+  const step = p.stepCount > 1 ? `Step ${p.stepIndex} of ${p.stepCount} (${p.stepName}) · ` : '';
+  if (p.phase === 'scanning' || p.total == null) return `${step}Scanning… ${p.scanned.toLocaleString()} files found`;
+  return `${step}${p.processed.toLocaleString()} of ${p.total.toLocaleString()} files`;
+}
+
 interface Props {
   record: JobRecord;
   onChanged: () => void;
@@ -38,10 +45,32 @@ export default function JobCard({ record, onChanged }: Props) {
   const [preview, setPreview] = useState<JobPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [confirmFirstRun, setConfirmFirstRun] = useState(false);
+  // Live progress for this job, whether the run was started here, by a schedule, or by the folder watcher.
+  const [progress, setProgress] = useState<RunProgressEvent | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     void window.fileshuttleAPI.jobs.getStats(record.id).then(setStats);
   }, [record.id]);
+
+  useEffect(() => {
+    void window.fileshuttleAPI.jobs.getActive().then((active) => {
+      setProgress(active.find((event) => event.jobId === record.id) ?? null);
+    });
+    return window.fileshuttleAPI.jobs.onProgress((event) => {
+      if (event.jobId !== record.id) return;
+      if (event.phase === 'finished') {
+        setProgress(null);
+        setCancelling(false);
+        // A run that this card didn't start (schedule, watcher) still changes its stats.
+        void window.fileshuttleAPI.jobs.getStats(record.id).then(setStats);
+      } else {
+        setProgress(event);
+      }
+    });
+  }, [record.id]);
+
+  const busy = running || progress !== null;
 
   const hasDestructiveStep = record.steps.some((step) => step.enabled && isDestructiveMapping(step));
 
@@ -58,7 +87,8 @@ export default function JobCard({ record, onChanged }: Props) {
     try {
       const result = await window.fileshuttleAPI.jobs.run(record.id);
       setStatus(
-        `Moved ${result.filesMoved}, copied ${result.filesCopied}, deleted ${result.filesDeleted}, zipped ${result.filesZipped}, extracted ${result.filesExtracted}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`
+        (result.cancelled ? 'Cancelled — ' : '') +
+          `Moved ${result.filesMoved}, copied ${result.filesCopied}, deleted ${result.filesDeleted}, zipped ${result.filesZipped}, extracted ${result.filesExtracted}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`
       );
       setStats(await window.fileshuttleAPI.jobs.getStats(record.id));
     } catch (err) {
@@ -66,6 +96,11 @@ export default function JobCard({ record, onChanged }: Props) {
     } finally {
       setRunning(false);
     }
+  };
+
+  const cancelRun = async () => {
+    setCancelling(true);
+    await window.fileshuttleAPI.jobs.cancel(record.id);
   };
 
   const openPreview = async () => {
@@ -129,17 +164,30 @@ export default function JobCard({ record, onChanged }: Props) {
       </div>
 
       <p className="muted">{statsLine()}</p>
+      {progress && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="muted" style={{ flex: 1 }}>{progressLine(progress)}</span>
+            <button className="text danger" onClick={() => void cancelRun()} disabled={cancelling}>
+              {cancelling ? 'Cancelling…' : 'Cancel'}
+            </button>
+          </div>
+          {progress.phase === 'processing' && progress.total != null && progress.total > 0 && (
+            <progress value={progress.processed} max={progress.total} style={{ width: '100%' }} />
+          )}
+        </div>
+      )}
       {status && <p className="muted">{status}</p>}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="primary" onClick={requestRun} disabled={running || record.steps.length === 0}>
-            {running ? 'Running...' : 'Run Now'}
+          <button className="primary" onClick={requestRun} disabled={busy || record.steps.length === 0}>
+            {busy ? 'Running...' : 'Run Now'}
           </button>
           <button
             className="outline"
             onClick={() => void openPreview()}
-            disabled={running || previewing || record.steps.length === 0}
+            disabled={busy || previewing || record.steps.length === 0}
             title="See what this job would do, without changing anything"
           >
             {previewing ? 'Checking...' : 'Preview'}

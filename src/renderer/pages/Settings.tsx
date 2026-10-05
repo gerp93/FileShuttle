@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
-import { DEFAULT_LOG_RETENTION, LOG_RETENTION_PRESETS, LogRetentionId } from '../../shared/types';
+import {
+  DEFAULT_LOG_RETENTION,
+  DEFAULT_UNZIP_LIMITS_SETTING,
+  LOG_RETENTION_PRESETS,
+  LogRetentionId,
+  validateUnzipLimits,
+} from '../../shared/types';
+import { errorMessage } from '../utils/errors';
 import { useTheme } from '../context/ThemeContext';
 import { FletThemeId, getThemeList } from '../utils/themes';
 
@@ -11,6 +18,9 @@ export default function Settings() {
   const [startupEnabled, setStartupEnabled] = useState(false);
   const [logRetention, setLogRetention] = useState<LogRetentionId>(DEFAULT_LOG_RETENTION);
   const [overwriteBackup, setOverwriteBackup] = useState(true);
+  const [unzipEntries, setUnzipEntries] = useState(String(DEFAULT_UNZIP_LIMITS_SETTING.maxEntries));
+  const [unzipGB, setUnzipGB] = useState(String(DEFAULT_UNZIP_LIMITS_SETTING.maxTotalGB));
+  const [unzipError, setUnzipError] = useState('');
   const [updateStatus, setUpdateStatus] = useState('');
   const [confirmRelocate, setConfirmRelocate] = useState<{ message: string; action: () => Promise<void> } | null>(null);
   const [confirmPurge, setConfirmPurge] = useState(false);
@@ -28,12 +38,32 @@ export default function Settings() {
       setStartupEnabled(s.enabled);
     });
     void window.fileshuttleAPI.settings.getOverwriteBackup().then(setOverwriteBackup);
+    void window.fileshuttleAPI.settings.getUnzipLimits().then((limits) => {
+      setUnzipEntries(String(limits.maxEntries));
+      setUnzipGB(String(limits.maxTotalGB));
+    });
     void window.fileshuttleAPI.app.getVersion().then(setVersion);
     const getLogRetention = window.fileshuttleAPI.settings.getLogRetention;
     if (typeof getLogRetention === 'function') {
       void getLogRetention().then(setLogRetention);
     }
   }, []);
+
+  const saveUnzipLimits = async () => {
+    const limits = { maxEntries: Number(unzipEntries), maxTotalGB: Number(unzipGB) };
+    const problem = validateUnzipLimits(limits);
+    if (problem) {
+      setUnzipError(problem);
+      return;
+    }
+    try {
+      await window.fileshuttleAPI.settings.setUnzipLimits(limits);
+      setUnzipError('');
+      setSnackbar('Unzip limits saved.');
+    } catch (err) {
+      setUnzipError(errorMessage(err));
+    }
+  };
 
   const changeLogRetention = async (id: LogRetentionId) => {
     setLogRetention(id);
@@ -146,6 +176,25 @@ export default function Settings() {
         Recycle Bin; on those, files can&apos;t be replaced while this is on. Turn it off to overwrite
         without keeping a copy.
       </p>
+
+      <h3 style={{ fontSize: 14, marginBottom: 4 }}>Unzip limits</h3>
+      <p className="muted" style={{ marginTop: 0 }}>
+        An archive that has more entries than this, or would expand to more than this much data, is
+        not extracted (it is left where it is and reported). This protects against &quot;zip bombs&quot;
+        that fill the disk.
+      </p>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 8 }}>
+        <label className="field">
+          Max entries per archive
+          <input type="number" min={1} value={unzipEntries} onChange={(e) => setUnzipEntries(e.target.value)} />
+        </label>
+        <label className="field">
+          Max size per archive (GB)
+          <input type="number" min={0.1} step={0.5} value={unzipGB} onChange={(e) => setUnzipGB(e.target.value)} />
+        </label>
+        <button className="outline" onClick={() => void saveUnzipLimits()}>Save Limits</button>
+      </div>
+      {unzipError && <p className="error-text">{unzipError}</p>}
 
       <hr className="divider" />
 
