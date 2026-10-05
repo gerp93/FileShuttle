@@ -5,6 +5,7 @@ import {
   DbLocationInfo,
   FileOutcome,
   HistoryListFilter,
+  JobPreview,
   JobRecord,
   JobRef,
   LogRetentionId,
@@ -14,6 +15,7 @@ import {
   RunResult,
   RunStats,
   RunSummary,
+  StepPreview,
   UpdateCheckResult,
   UpdateJobInput,
   UpdateMappingInput,
@@ -30,6 +32,8 @@ export interface FileShuttleAPI {
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
     listJobsUsing: (id: number) => Promise<JobRef[]>;
+    preview: (id: number) => Promise<StepPreview>;
+    previewInput: (input: CreateMappingInput) => Promise<StepPreview>;
   };
   jobs: {
     list: () => Promise<JobRecord[]>;
@@ -39,6 +43,7 @@ export interface FileShuttleAPI {
     delete: (id: number) => Promise<void>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
+    preview: (id: number) => Promise<JobPreview>;
     run: (id: number) => Promise<RunResult>;
     runAll: () => Promise<RunAllSummary>;
   };
@@ -88,6 +93,8 @@ const api: FileShuttleAPI = {
     setEnabled: (id, enabled) => ipcRenderer.invoke('mappings:setEnabled', id, enabled),
     getStats: (id) => ipcRenderer.invoke('mappings:getStats', id),
     listJobsUsing: (id) => ipcRenderer.invoke('mappings:listJobsUsing', id),
+    preview: (id) => ipcRenderer.invoke('mappings:preview', id),
+    previewInput: (input) => ipcRenderer.invoke('mappings:previewInput', input),
   },
   jobs: {
     list: () => ipcRenderer.invoke('jobs:list'),
@@ -97,6 +104,7 @@ const api: FileShuttleAPI = {
     delete: (id) => ipcRenderer.invoke('jobs:delete', id),
     setEnabled: (id, enabled) => ipcRenderer.invoke('jobs:setEnabled', id, enabled),
     getStats: (id) => ipcRenderer.invoke('jobs:getStats', id),
+    preview: (id) => ipcRenderer.invoke('jobs:preview', id),
     run: (id) => ipcRenderer.invoke('jobs:run', id),
     runAll: () => ipcRenderer.invoke('jobs:runAll'),
   },

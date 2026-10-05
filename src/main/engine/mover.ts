@@ -1,7 +1,7 @@
 import AdmZip from 'adm-zip';
 import * as fs from 'fs';
 import * as path from 'path';
-import { validateMappingPaths } from '../../shared/pathSafety';
+import { normalizeFolder, validateMappingPaths } from '../../shared/pathSafety';
 import { FileOutcome, MappingConfig, RunResult } from '../../shared/types';
 import { buildRunResult } from '../database/repository';
 import { evaluateFilters, partitionKeepNewest } from './filters';
@@ -11,12 +11,38 @@ export type TrashFn = (filePath: string) => Promise<void>;
 
 export interface RunOptions {
   trash?: TrashFn;
+  /**
+   * Work out exactly what a run would do -- same candidate selection, filters,
+   * keep-newest ranking and conflict resolution -- without touching anything
+   * on disk. The returned outcomes are the ones a real run would produce.
+   */
+  dryRun?: boolean;
 }
 
 const electronTrash: TrashFn = async (filePath) => {
   const { shell } = await import('electron');
   await shell.trashItem(filePath);
 };
+
+/** Everything an action needs besides the file in front of it. */
+interface RunContext {
+  trash: TrashFn;
+  dryRun: boolean;
+  /**
+   * Destinations a dry run has "used". A real run sees its own earlier output
+   * on disk (e.g. two zips whose extraction folders collide); a dry run has to
+   * remember those itself or it would report conflicts differently.
+   */
+  claimed: Set<string>;
+}
+
+function exists(ctx: RunContext, p: string): boolean {
+  return fs.existsSync(p) || (ctx.dryRun && ctx.claimed.has(normalizeFolder(p)));
+}
+
+function claim(ctx: RunContext, p: string): void {
+  if (ctx.dryRun) ctx.claimed.add(normalizeFolder(p));
+}
 
 interface Candidate {
   filePath: string;
@@ -25,7 +51,11 @@ interface Candidate {
 }
 
 export async function runMapping(mapping: MappingConfig, options: RunOptions = {}): Promise<RunResult> {
-  const trash = options.trash ?? electronTrash;
+  const ctx: RunContext = {
+    trash: options.trash ?? electronTrash,
+    dryRun: options.dryRun ?? false,
+    claimed: new Set(),
+  };
   const startedAt = new Date();
   const sourceRoot = mapping.sourcePath;
   const outcomes: FileOutcome[] = [];
@@ -66,7 +96,7 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
         continue;
       }
 
-      zipEntry(mapping, mapping.destPath, entryPath, stat, outcomes);
+      zipEntry(mapping, mapping.destPath, entryPath, stat, outcomes, ctx);
     }
     return buildRunResult(startedAt, new Date(), outcomes);
   }
@@ -120,7 +150,7 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
   }
 
   for (const file of rest) {
-    await actOnFile(mapping, sourceRoot, destRoot, file.filePath, file.stat, outcomes, trash);
+    await actOnFile(mapping, sourceRoot, destRoot, file.filePath, file.stat, outcomes, ctx);
   }
 
   return buildRunResult(startedAt, new Date(), outcomes);
@@ -133,11 +163,11 @@ async function actOnFile(
   filePath: string,
   stat: fs.Stats,
   outcomes: FileOutcome[],
-  trash: TrashFn
+  ctx: RunContext
 ): Promise<void> {
   if (mapping.actionType === 'delete') {
     try {
-      await trash(filePath);
+      if (!ctx.dryRun) await ctx.trash(filePath);
       outcomes.push({
         sourcePath: filePath,
         destPath: null,
@@ -158,14 +188,14 @@ async function actOnFile(
   }
 
   if (mapping.actionType === 'unzip') {
-    await extractZipEntry(mapping, sourceRoot, destRoot!, filePath, stat, outcomes, trash);
+    await extractZipEntry(mapping, sourceRoot, destRoot!, filePath, stat, outcomes, ctx);
     return;
   }
 
   const destPath = resolveDestination(sourceRoot, destRoot!, filePath);
   let reason: string | null = null;
-  if (fs.existsSync(destPath)) {
-    const resolved = resolveConflict(destPath, mapping.conflictPolicy);
+  if (exists(ctx, destPath)) {
+    const resolved = resolveConflict(destPath, mapping.conflictPolicy, (p) => exists(ctx, p));
     if (resolved === null) {
       outcomes.push({
         sourcePath: filePath,
@@ -178,12 +208,12 @@ async function actOnFile(
     }
     reason = `conflict_${mapping.conflictPolicy}`;
     if (resolved !== destPath) {
-      moveOrCopy(filePath, resolved, mapping.actionType, outcomes, reason, stat.size);
+      moveOrCopy(filePath, resolved, mapping.actionType, outcomes, reason, stat.size, ctx);
       return;
     }
   }
 
-  moveOrCopy(filePath, destPath, mapping.actionType, outcomes, reason, stat.size);
+  moveOrCopy(filePath, destPath, mapping.actionType, outcomes, reason, stat.size, ctx);
 }
 
 /** Extracts a matched .zip file into a same-named subfolder of destRoot, then trashes the zip. */
@@ -194,7 +224,7 @@ async function extractZipEntry(
   filePath: string,
   stat: fs.Stats,
   outcomes: FileOutcome[],
-  trash: TrashFn
+  ctx: RunContext
 ): Promise<void> {
   const relative = path.relative(sourceRoot, filePath);
   const relDir = path.dirname(relative);
@@ -203,7 +233,7 @@ async function extractZipEntry(
 
   let finalDir = targetDir;
   let reason: string | null = null;
-  if (fs.existsSync(targetDir)) {
+  if (exists(ctx, targetDir)) {
     if (mapping.conflictPolicy === 'skip') {
       outcomes.push({
         sourcePath: filePath,
@@ -216,21 +246,30 @@ async function extractZipEntry(
     }
     reason = `conflict_${mapping.conflictPolicy}`;
     if (mapping.conflictPolicy === 'auto_rename') {
-      finalDir = firstFreeDir(targetDir);
+      finalDir = firstFreeDir(targetDir, (p) => exists(ctx, p));
     }
   }
 
   try {
-    fs.mkdirSync(finalDir, { recursive: true });
-    new AdmZip(filePath).extractAllTo(finalDir, true);
+    if (ctx.dryRun) {
+      // Opening the archive only reads it, and it surfaces a corrupt zip in
+      // the preview instead of on the real run.
+      new AdmZip(filePath);
+      claim(ctx, finalDir);
+    } else {
+      fs.mkdirSync(finalDir, { recursive: true });
+      new AdmZip(filePath).extractAllTo(finalDir, true);
+    }
     outcomes.push({ sourcePath: filePath, destPath: finalDir, outcome: 'extracted', reason, sizeBytes: stat.size });
   } catch (err) {
     outcomes.push({ sourcePath: filePath, destPath: finalDir, outcome: 'error', reason: String(err), sizeBytes: stat.size });
     return;
   }
 
+  if (ctx.dryRun) return;
+
   try {
-    await trash(filePath);
+    await ctx.trash(filePath);
   } catch (err) {
     outcomes.push({
       sourcePath: filePath,
@@ -248,7 +287,8 @@ function zipEntry(
   destRoot: string,
   entryPath: string,
   stat: fs.Stats,
-  outcomes: FileOutcome[]
+  outcomes: FileOutcome[],
+  ctx: RunContext
 ): void {
   const name = path.basename(entryPath);
   const targetZip = path.join(destRoot, `${name}.zip`);
@@ -256,8 +296,8 @@ function zipEntry(
 
   let finalZip = targetZip;
   let reason: string | null = null;
-  if (fs.existsSync(targetZip)) {
-    const resolved = resolveConflict(targetZip, mapping.conflictPolicy);
+  if (exists(ctx, targetZip)) {
+    const resolved = resolveConflict(targetZip, mapping.conflictPolicy, (p) => exists(ctx, p));
     if (resolved === null) {
       outcomes.push({ sourcePath: entryPath, destPath: null, outcome: 'skipped', reason: 'conflict_skip', sizeBytes: size });
       return;
@@ -267,25 +307,29 @@ function zipEntry(
   }
 
   try {
-    fs.mkdirSync(destRoot, { recursive: true });
-    const zip = new AdmZip();
-    if (stat.isDirectory()) {
-      zip.addLocalFolder(entryPath, name);
+    if (ctx.dryRun) {
+      claim(ctx, finalZip);
     } else {
-      zip.addLocalFile(entryPath);
+      fs.mkdirSync(destRoot, { recursive: true });
+      const zip = new AdmZip();
+      if (stat.isDirectory()) {
+        zip.addLocalFolder(entryPath, name);
+      } else {
+        zip.addLocalFile(entryPath);
+      }
+      zip.writeZip(finalZip);
     }
-    zip.writeZip(finalZip);
     outcomes.push({ sourcePath: entryPath, destPath: finalZip, outcome: 'zipped', reason, sizeBytes: size });
   } catch (err) {
     outcomes.push({ sourcePath: entryPath, destPath: finalZip, outcome: 'error', reason: String(err), sizeBytes: size });
   }
 }
 
-function firstFreeDir(dirPath: string): string {
+function firstFreeDir(dirPath: string, taken: (p: string) => boolean = fs.existsSync): string {
   let n = 1;
   while (true) {
     const candidate = `${dirPath} (${n})`;
-    if (!fs.existsSync(candidate)) return candidate;
+    if (!taken(candidate)) return candidate;
     n += 1;
   }
 }
@@ -314,18 +358,28 @@ function moveOrCopy(
   actionType: MappingConfig['actionType'],
   outcomes: FileOutcome[],
   reason: string | null,
-  size: number
+  size: number,
+  ctx: RunContext
 ): void {
   try {
-    fs.mkdirSync(path.dirname(destPath), { recursive: true });
-    if (actionType === 'copy') {
-      fs.copyFileSync(filePath, destPath);
-      fs.utimesSync(destPath, fs.statSync(filePath).atime, fs.statSync(filePath).mtime);
-      outcomes.push({ sourcePath: filePath, destPath, outcome: 'copied', reason, sizeBytes: size });
+    if (ctx.dryRun) {
+      claim(ctx, destPath);
     } else {
-      renameOrCopyAcrossDevices(filePath, destPath);
-      outcomes.push({ sourcePath: filePath, destPath, outcome: 'moved', reason, sizeBytes: size });
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      if (actionType === 'copy') {
+        fs.copyFileSync(filePath, destPath);
+        fs.utimesSync(destPath, fs.statSync(filePath).atime, fs.statSync(filePath).mtime);
+      } else {
+        renameOrCopyAcrossDevices(filePath, destPath);
+      }
     }
+    outcomes.push({
+      sourcePath: filePath,
+      destPath,
+      outcome: actionType === 'copy' ? 'copied' : 'moved',
+      reason,
+      sizeBytes: size,
+    });
   } catch (err) {
     outcomes.push({ sourcePath: filePath, destPath, outcome: 'error', reason: String(err), sizeBytes: size });
   }
@@ -421,21 +475,25 @@ export function resolveDestination(sourceRoot: string, destRoot: string, filePat
   return path.join(destRoot, relative);
 }
 
-export function resolveConflict(destPath: string, policy: string): string | null {
+export function resolveConflict(
+  destPath: string,
+  policy: string,
+  taken: (p: string) => boolean = fs.existsSync
+): string | null {
   if (policy === 'overwrite') return destPath;
   if (policy === 'skip') return null;
-  if (policy === 'auto_rename') return firstFreePath(destPath);
+  if (policy === 'auto_rename') return firstFreePath(destPath, taken);
   throw new Error(`Unknown conflict policy: ${policy}`);
 }
 
-function firstFreePath(destPath: string): string {
+function firstFreePath(destPath: string, taken: (p: string) => boolean): string {
   const dir = path.dirname(destPath);
   const ext = path.extname(destPath);
   const stem = path.basename(destPath, ext);
   let n = 1;
   while (true) {
     const candidate = path.join(dir, `${stem} (${n})${ext}`);
-    if (!fs.existsSync(candidate)) return candidate;
+    if (!taken(candidate)) return candidate;
     n += 1;
   }
 }

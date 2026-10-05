@@ -6,6 +6,7 @@ import type {
   DbLocationInfo,
   FileOutcome,
   HistoryListFilter,
+  JobPreview,
   JobRecord,
   JobRef,
   LogRetentionId,
@@ -15,6 +16,7 @@ import type {
   RunResult,
   RunStats,
   RunSummary,
+  StepPreview,
   UpdateCheckResult,
   UpdateJobInput,
   UpdateMappingInput,
@@ -31,6 +33,8 @@ interface FileShuttleAPI {
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
     listJobsUsing: (id: number) => Promise<JobRef[]>;
+    preview: (id: number) => Promise<StepPreview>;
+    previewInput: (input: CreateMappingInput) => Promise<StepPreview>;
   };
   jobs: {
     list: () => Promise<JobRecord[]>;
@@ -40,6 +44,7 @@ interface FileShuttleAPI {
     delete: (id: number) => Promise<void>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
+    preview: (id: number) => Promise<JobPreview>;
     run: (id: number) => Promise<RunResult>;
     runAll: () => Promise<RunAllSummary>;
   };

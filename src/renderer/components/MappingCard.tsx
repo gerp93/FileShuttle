@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { mappingInUseMessage, MappingRecord, RunStats } from '../../shared/types';
+import { mappingInUseMessage, MappingRecord, RunStats, StepPreview } from '../../shared/types';
 import { errorMessage } from '../utils/errors';
+import PreviewDialog from './PreviewDialog';
 
 const CONFLICT_LABELS: Record<string, string> = {
   skip: 'Skip duplicates',
@@ -47,6 +48,9 @@ export default function MappingCard({ record, onChanged }: Props) {
   const [showClone, setShowClone] = useState(false);
   const [cloneName, setCloneName] = useState('');
   const [cloneError, setCloneError] = useState('');
+  const [preview, setPreview] = useState<StepPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState('');
 
   useEffect(() => {
     void window.fileshuttleAPI.mappings.getStats(record.id).then(setStats);
@@ -94,6 +98,18 @@ export default function MappingCard({ record, onChanged }: Props) {
     } catch (err) {
       setConfirmDelete(false);
       setDeleteError(errorMessage(err));
+    }
+  };
+
+  const openPreview = async () => {
+    setPreviewError('');
+    setPreviewing(true);
+    try {
+      setPreview(await window.fileshuttleAPI.mappings.preview(record.id));
+    } catch (err) {
+      setPreviewError(errorMessage(err));
+    } finally {
+      setPreviewing(false);
     }
   };
 
@@ -157,12 +173,20 @@ export default function MappingCard({ record, onChanged }: Props) {
       </div>
 
       <p className="muted">{statsLine()}</p>
+      {previewError && <p className="error-text">Preview failed: {previewError}</p>}
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+        <button className="text" onClick={() => void openPreview()} disabled={previewing}>
+          {previewing ? 'Checking...' : 'Preview'}
+        </button>
         <button className="text" onClick={() => navigate(`/editor/${record.id}`)}>Edit</button>
         <button className="text" onClick={openClone}>Clone</button>
         <button className="text danger" onClick={() => void requestDelete()}>Delete</button>
       </div>
+
+      {preview && (
+        <PreviewDialog title={`Preview: ${record.name}`} steps={[preview]} onClose={() => setPreview(null)} />
+      )}
 
       {showClone && (
         <div className="dialog-overlay">

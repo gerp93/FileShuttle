@@ -362,3 +362,39 @@ label.field {
 .history-page .snackbar {
   bottom: 72px;
 }
+
+.dialog-wide {
+  max-width: 920px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-body {
+  overflow-y: auto;
+  min-height: 80px;
+  flex: 1;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg);
+}
+
+.preview-step + .preview-step {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.preview-step-title {
+  margin: 0 0 4px;
+}
+
+.preview-step .run-detail {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.preview-error {
+  color: var(--color-accent-red);
+}

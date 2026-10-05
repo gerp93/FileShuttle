@@ -254,3 +254,48 @@ export interface HistoryListFilter {
   mappingId?: number | null;
   jobId?: number | null;
 }
+
+/** A mapping that deletes files, or can replace files that already exist at the destination. */
+export function isDestructiveMapping(mapping: { actionType: ActionType; conflictPolicy: ConflictPolicy }): boolean {
+  return mapping.actionType === 'delete' || mapping.conflictPolicy === 'overwrite';
+}
+
+/** Plain-language form of a FileOutcome.reason for display. */
+export function outcomeReasonLabel(reason: string | null): string | null {
+  if (!reason) return null;
+  switch (reason) {
+    case 'kept_newest':
+      return 'kept (newest)';
+    case 'conflict_skip':
+      return 'already exists at destination';
+    case 'conflict_overwrite':
+      return 'replaces the existing file';
+    case 'conflict_auto_rename':
+      return 'renamed to keep both';
+    default:
+      return reason;
+  }
+}
+
+/** Preview results carry at most this many per-file rows over IPC; the counts always cover every file. */
+export const PREVIEW_OUTCOME_LIMIT = 2000;
+
+export interface StepPreview {
+  mappingId: number;
+  mappingName: string;
+  actionType: ActionType;
+  /** Counts are for every matching file; `fileOutcomes` may be cut to PREVIEW_OUTCOME_LIMIT rows. */
+  result: RunResult;
+  totalOutcomes: number;
+  truncated: boolean;
+  /** Bytes of the files that would be moved/copied/deleted/zipped/extracted. */
+  totalBytes: number;
+  /** How many of those would replace a file that already exists at the destination. */
+  overwriteCount: number;
+}
+
+export interface JobPreview {
+  jobId: number;
+  jobName: string;
+  steps: StepPreview[];
+}

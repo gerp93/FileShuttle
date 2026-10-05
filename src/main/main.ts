@@ -17,6 +17,7 @@ import {
 } from './dbLocation';
 import { logStartupStep, resetStartupLog } from './startupLog';
 import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
+import { inputToConfig, previewJob, previewMapping } from './services/previewService';
 import { validateMappingPaths } from '../shared/pathSafety';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
@@ -418,6 +419,18 @@ function registerIPCHandlers(): void {
     return newId;
   });
 
+  ipcMain.handle('mappings:preview', async (_, id: number) => {
+    const mapping = repo.getMapping(db!, id);
+    if (!mapping) throw new Error(`No mapping with id ${id}`);
+    return previewMapping(repo.toMappingConfig(mapping));
+  });
+
+  // Previews the editor's current, possibly unsaved, form values.
+  ipcMain.handle('mappings:previewInput', async (_, input: CreateMappingInput) => {
+    assertValidMappingPaths(input);
+    return previewMapping(inputToConfig(input));
+  });
+
   ipcMain.handle('mappings:listJobsUsing', (_, id: number) => repo.listJobsUsingMapping(db!, id));
 
   ipcMain.handle('mappings:setEnabled', (_, id: number, enabled: boolean) => {
@@ -463,6 +476,8 @@ function registerIPCHandlers(): void {
   });
 
   ipcMain.handle('jobs:getStats', (_, id: number) => repo.getJobStats(db!, id));
+
+  ipcMain.handle('jobs:preview', (_, id: number) => previewJob(db!, id));
 
   ipcMain.handle('jobs:run', async (_, id: number): Promise<RunResult> => {
     return executeJob(db!, id, 'manual');

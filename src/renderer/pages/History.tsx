@@ -3,6 +3,7 @@ import {
   computeRunStatus,
   FileOutcome,
   MappingRecord,
+  outcomeReasonLabel,
   RUN_STATUSES,
   RunStatus,
   runStatusClass,
@@ -37,12 +38,6 @@ type HistoryEntry = JobHistoryGroup | StandaloneHistoryEntry;
 
 function runMovedFiles(run: Counts): boolean {
   return run.filesMoved + run.filesCopied + run.filesDeleted + run.filesExtracted + run.filesZipped > 0;
-}
-
-function reasonLabel(reason: string | null): string | null {
-  if (!reason) return null;
-  if (reason === 'kept_newest') return 'kept (newest)';
-  return reason;
 }
 
 function actionSummary(run: Counts, actionType: string | null): string {
@@ -196,7 +191,7 @@ function FileDetails({ expanded }: { expanded: FileOutcome[] | undefined }) {
         <div key={i} className="run-detail">
           {detail.outcome.toUpperCase().padEnd(8)} {detail.sourcePath}
           {detail.destPath ? `  →  ${detail.destPath}` : ''}
-          {reasonLabel(detail.reason) ? `  (${reasonLabel(detail.reason)})` : ''}
+          {outcomeReasonLabel(detail.reason) ? `  (${outcomeReasonLabel(detail.reason)})` : ''}
         </div>
       ))}
     </div>
