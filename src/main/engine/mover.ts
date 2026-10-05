@@ -1,10 +1,21 @@
 import AdmZip from 'adm-zip';
-import { shell } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { FileOutcome, MappingConfig, RunResult } from '../../shared/types';
 import { buildRunResult } from '../database/repository';
 import { evaluateFilters, partitionKeepNewest } from './filters';
+
+/** Sends a path to the Recycle Bin. Injected so the engine can run (and be tested) outside Electron. */
+export type TrashFn = (filePath: string) => Promise<void>;
+
+export interface RunOptions {
+  trash?: TrashFn;
+}
+
+const electronTrash: TrashFn = async (filePath) => {
+  const { shell } = await import('electron');
+  await shell.trashItem(filePath);
+};
 
 interface Candidate {
   filePath: string;
@@ -12,7 +23,8 @@ interface Candidate {
   stat: fs.Stats;
 }
 
-export async function runMapping(mapping: MappingConfig): Promise<RunResult> {
+export async function runMapping(mapping: MappingConfig, options: RunOptions = {}): Promise<RunResult> {
+  const trash = options.trash ?? electronTrash;
   const startedAt = new Date();
   const sourceRoot = mapping.sourcePath;
   const outcomes: FileOutcome[] = [];
@@ -92,7 +104,7 @@ export async function runMapping(mapping: MappingConfig): Promise<RunResult> {
   }
 
   for (const file of rest) {
-    await actOnFile(mapping, sourceRoot, destRoot, file.filePath, file.stat, outcomes);
+    await actOnFile(mapping, sourceRoot, destRoot, file.filePath, file.stat, outcomes, trash);
   }
 
   return buildRunResult(startedAt, new Date(), outcomes);
@@ -104,11 +116,12 @@ async function actOnFile(
   destRoot: string | null,
   filePath: string,
   stat: fs.Stats,
-  outcomes: FileOutcome[]
+  outcomes: FileOutcome[],
+  trash: TrashFn
 ): Promise<void> {
   if (mapping.actionType === 'delete') {
     try {
-      await shell.trashItem(filePath);
+      await trash(filePath);
       outcomes.push({
         sourcePath: filePath,
         destPath: null,
@@ -129,7 +142,7 @@ async function actOnFile(
   }
 
   if (mapping.actionType === 'unzip') {
-    await extractZipEntry(mapping, sourceRoot, destRoot!, filePath, stat, outcomes);
+    await extractZipEntry(mapping, sourceRoot, destRoot!, filePath, stat, outcomes, trash);
     return;
   }
 
@@ -164,7 +177,8 @@ async function extractZipEntry(
   destRoot: string,
   filePath: string,
   stat: fs.Stats,
-  outcomes: FileOutcome[]
+  outcomes: FileOutcome[],
+  trash: TrashFn
 ): Promise<void> {
   const relative = path.relative(sourceRoot, filePath);
   const relDir = path.dirname(relative);
@@ -200,7 +214,7 @@ async function extractZipEntry(
   }
 
   try {
-    await shell.trashItem(filePath);
+    await trash(filePath);
   } catch (err) {
     outcomes.push({
       sourcePath: filePath,
