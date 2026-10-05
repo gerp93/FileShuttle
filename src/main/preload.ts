@@ -60,6 +60,8 @@ export interface FileShuttleAPI {
     setStartup: (enabled: boolean) => Promise<void>;
     getLogRetention: () => Promise<LogRetentionId>;
     setLogRetention: (id: LogRetentionId) => Promise<PurgeResult>;
+    getOverwriteBackup: () => Promise<boolean>;
+    setOverwriteBackup: (enabled: boolean) => Promise<void>;
   };
   dialogs: {
     pickFolder: (title: string) => Promise<string | null>;
@@ -121,6 +123,8 @@ const api: FileShuttleAPI = {
     setStartup: (enabled) => ipcRenderer.invoke('settings:setStartup', enabled),
     getLogRetention: () => ipcRenderer.invoke('settings:getLogRetention'),
     setLogRetention: (id) => ipcRenderer.invoke('settings:setLogRetention', id),
+    getOverwriteBackup: () => ipcRenderer.invoke('settings:getOverwriteBackup'),
+    setOverwriteBackup: (enabled) => ipcRenderer.invoke('settings:setOverwriteBackup', enabled),
   },
   dialogs: {
     pickFolder: (title) => ipcRenderer.invoke('dialogs:pickFolder', title),

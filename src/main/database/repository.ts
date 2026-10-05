@@ -563,3 +563,14 @@ export function migrateChainsToJobs(db: Database): void {
 
   setSetting(db, 'jobs_migrated', '1');
 }
+
+const OVERWRITE_BACKUP_KEY = 'overwrite_backup';
+
+/** Whether files replaced by an "overwrite" mapping are first sent to the Recycle Bin. On unless turned off. */
+export function getOverwriteBackup(db: Database): boolean {
+  return getSetting(db, OVERWRITE_BACKUP_KEY, '1') !== '0';
+}
+
+export function setOverwriteBackup(db: Database, enabled: boolean): void {
+  setSetting(db, OVERWRITE_BACKUP_KEY, enabled ? '1' : '0');
+}

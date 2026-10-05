@@ -64,8 +64,12 @@ function pathBasename(filePath: string): string {
 }
 
 function matchExtension(filePath: string, value: string): boolean {
-  const wanted = value.toLowerCase().replace(/^\./, '');
-  const ext = pathBasename(filePath).split('.').pop()?.toLowerCase().replace(/^\./, '') ?? '';
+  const wanted = value.trim().toLowerCase().replace(/^\./, '');
+  const name = pathBasename(filePath);
+  // Same rule as path.extname: the text after the last dot, but a leading dot
+  // alone (.gitignore) or no dot at all (README) means there is no extension.
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
   return ext === wanted;
 }
 
@@ -83,7 +87,8 @@ function matchGlob(fileName: string, pattern: string): boolean {
 }
 
 function matchSize(actualBytes: number, operator: string, value: string): boolean {
-  const threshold = parseInt(value, 10);
+  const threshold = Number(value.trim());
+  if (value.trim() === '' || Number.isNaN(threshold)) throw new Error(`Invalid size filter value: ${value}`);
   if (operator === 'min') return actualBytes >= threshold;
   if (operator === 'max') return actualBytes <= threshold;
   throw new Error(`Unknown size operator: ${operator}`);
@@ -91,6 +96,7 @@ function matchSize(actualBytes: number, operator: string, value: string): boolea
 
 function matchDate(actualMs: number, operator: string, value: string): boolean {
   const threshold = new Date(value);
+  if (Number.isNaN(threshold.getTime())) throw new Error(`Invalid date filter value: ${value}`);
   const actual = new Date(actualMs);
   if (operator === 'before') return actual < threshold;
   if (operator === 'after') return actual > threshold;

@@ -18,7 +18,7 @@ import {
 import { logStartupStep, resetStartupLog } from './startupLog';
 import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
 import { inputToConfig, previewJob, previewMapping } from './services/previewService';
-import { validateMappingPaths } from '../shared/pathSafety';
+import { validateMappingInput } from '../shared/validation';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
 import { SchedulerService } from './scheduler/scheduler';
@@ -374,9 +374,9 @@ function checkForUpdatesNow(): Promise<UpdateCheckResult> {
   });
 }
 
-/** Rejects a mapping whose folders would make it feed on its own output. */
-function assertValidMappingPaths(input: CreateMappingInput): void {
-  const problem = validateMappingPaths(input);
+/** Rejects a mapping that is incomplete, has an unusable filter, or would feed on its own output. */
+function assertValidMapping(input: CreateMappingInput): void {
+  const problem = validateMappingInput(input);
   if (problem) throw new Error(problem);
 }
 
@@ -388,7 +388,7 @@ function registerIPCHandlers(): void {
   ipcMain.handle('mappings:get', (_, id: number) => repo.getMapping(db!, id));
 
   ipcMain.handle('mappings:create', (_, input: CreateMappingInput) => {
-    assertValidMappingPaths(input);
+    assertValidMapping(input);
     const id = repo.createMapping(db!, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -397,7 +397,7 @@ function registerIPCHandlers(): void {
   });
 
   ipcMain.handle('mappings:update', (_, id: number, input: UpdateMappingInput) => {
-    assertValidMappingPaths(input);
+    assertValidMapping(input);
     repo.updateMapping(db!, id, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -427,7 +427,7 @@ function registerIPCHandlers(): void {
 
   // Previews the editor's current, possibly unsaved, form values.
   ipcMain.handle('mappings:previewInput', async (_, input: CreateMappingInput) => {
-    assertValidMappingPaths(input);
+    assertValidMapping(input);
     return previewMapping(inputToConfig(input));
   });
 
@@ -516,6 +516,13 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('settings:setStartup', (_, enabled: boolean) => {
     setStartupEnabled(enabled);
+  });
+
+  ipcMain.handle('settings:getOverwriteBackup', () => repo.getOverwriteBackup(db!));
+
+  ipcMain.handle('settings:setOverwriteBackup', (_, enabled: boolean) => {
+    repo.setOverwriteBackup(db!, enabled);
+    saveDatabase(db!);
   });
 
   ipcMain.handle('settings:getLogRetention', () => getLogRetention(db!));

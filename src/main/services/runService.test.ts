@@ -110,6 +110,45 @@ describe('executeJob', () => {
     expect(listTree(a)).toEqual(['file.txt']);
   });
 
+  it('records a step with a bad filter as a failed run and still runs the next step', async () => {
+    const a = path.join(root, 'a');
+    const c = path.join(root, 'c');
+    writeFile(path.join(a, 'file.txt'));
+    writeFile(path.join(c, 'other.txt'));
+    const bad = addMapping('bad-regex', a, path.join(root, 'b'), {
+      filters: [{ field: 'filename_regex', operator: 'matches', value: '(' }],
+    });
+    const good = addMapping('good', c, path.join(root, 'd'));
+    const jobId = addJob('mixed', [bad, good]);
+
+    const result = await executeJob(db, jobId, 'manual');
+
+    expect(result.filesErrored).toBe(1);
+    expect(result.filesMoved).toBe(1);
+    expect(listTree(a)).toEqual(['file.txt']);
+    expect(listTree(path.join(root, 'd'))).toEqual(['other.txt']);
+    const statuses = repo.listRuns(db, { jobId }).map((r) => r.status).sort();
+    expect(statuses).toEqual(['error', 'success']);
+  });
+
+  it('honours the overwrite-backup setting', async () => {
+    const src = path.join(root, 'src');
+    const dest = path.join(root, 'dest');
+    writeFile(path.join(src, 'a.txt'), 'NEW');
+    writeFile(path.join(dest, 'a.txt'), 'OLD');
+    const jobId = addJob('ow', [addMapping('ow', src, dest, { conflictPolicy: 'overwrite' })]);
+
+    // Off: overwrites in place, so the real (Electron) trash is never reached.
+    repo.setOverwriteBackup(db, false);
+    expect(repo.getOverwriteBackup(db)).toBe(false);
+    const result = await executeJob(db, jobId, 'manual');
+    expect(result.filesMoved).toBe(1);
+    expect(fs.readFileSync(path.join(dest, 'a.txt'), 'utf8')).toBe('NEW');
+
+    repo.setOverwriteBackup(db, true);
+    expect(repo.getOverwriteBackup(db)).toBe(true);
+  });
+
   it('rejects an unknown job', async () => {
     await expect(executeJob(db, 9999, 'manual')).rejects.toThrow(/No job/);
   });

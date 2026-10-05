@@ -10,6 +10,7 @@ export default function Settings() {
   const [startupSupported, setStartupSupported] = useState(false);
   const [startupEnabled, setStartupEnabled] = useState(false);
   const [logRetention, setLogRetention] = useState<LogRetentionId>(DEFAULT_LOG_RETENTION);
+  const [overwriteBackup, setOverwriteBackup] = useState(true);
   const [updateStatus, setUpdateStatus] = useState('');
   const [confirmRelocate, setConfirmRelocate] = useState<{ message: string; action: () => Promise<void> } | null>(null);
   const [confirmPurge, setConfirmPurge] = useState(false);
@@ -26,6 +27,7 @@ export default function Settings() {
       setStartupSupported(s.supported);
       setStartupEnabled(s.enabled);
     });
+    void window.fileshuttleAPI.settings.getOverwriteBackup().then(setOverwriteBackup);
     void window.fileshuttleAPI.app.getVersion().then(setVersion);
     const getLogRetention = window.fileshuttleAPI.settings.getLogRetention;
     if (typeof getLogRetention === 'function') {
@@ -122,6 +124,28 @@ export default function Settings() {
       {!startupSupported && (
         <p className="muted">Start-at-login isn&apos;t supported on this platform yet.</p>
       )}
+
+      <hr className="divider" />
+
+      <h2 style={{ fontSize: 16 }}>Safety</h2>
+      <div className="switch-row" style={{ marginBottom: 8 }}>
+        <input
+          type="checkbox"
+          id="overwrite-backup"
+          checked={overwriteBackup}
+          onChange={(e) => {
+            setOverwriteBackup(e.target.checked);
+            void window.fileshuttleAPI.settings.setOverwriteBackup(e.target.checked);
+          }}
+        />
+        <label htmlFor="overwrite-backup">Send replaced files to the Recycle Bin</label>
+      </div>
+      <p className="muted">
+        When a mapping is set to overwrite existing files, the file being replaced is moved to the
+        Recycle Bin first so it can be recovered. Network shares and some removable drives have no
+        Recycle Bin; on those, files can&apos;t be replaced while this is on. Turn it off to overwrite
+        without keeping a copy.
+      </p>
 
       <hr className="divider" />
 

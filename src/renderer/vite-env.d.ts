@@ -61,6 +61,8 @@ interface FileShuttleAPI {
     setStartup: (enabled: boolean) => Promise<void>;
     getLogRetention: () => Promise<LogRetentionId>;
     setLogRetention: (id: LogRetentionId) => Promise<PurgeResult>;
+    getOverwriteBackup: () => Promise<boolean>;
+    setOverwriteBackup: (enabled: boolean) => Promise<void>;
   };
   dialogs: {
     pickFolder: (title: string) => Promise<string | null>;

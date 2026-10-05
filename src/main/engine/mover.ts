@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { normalizeFolder, validateMappingPaths } from '../../shared/pathSafety';
 import { FileOutcome, MappingConfig, RunResult } from '../../shared/types';
+import { validateFilters } from '../../shared/validation';
 import { buildRunResult } from '../database/repository';
 import { evaluateFilters, partitionKeepNewest } from './filters';
 
@@ -17,6 +18,13 @@ export interface RunOptions {
    * on disk. The returned outcomes are the ones a real run would produce.
    */
   dryRun?: boolean;
+  /**
+   * When a mapping's conflict policy is "overwrite", send the file being
+   * replaced to the Recycle Bin first instead of destroying it. Defaults to
+   * true. If the Recycle Bin can't take it (e.g. a network share), that file
+   * is left alone and reported as an error rather than silently lost.
+   */
+  backupOverwritten?: boolean;
 }
 
 const electronTrash: TrashFn = async (filePath) => {
@@ -28,6 +36,7 @@ const electronTrash: TrashFn = async (filePath) => {
 interface RunContext {
   trash: TrashFn;
   dryRun: boolean;
+  backupOverwritten: boolean;
   /**
    * Destinations a dry run has "used". A real run sees its own earlier output
    * on disk (e.g. two zips whose extraction folders collide); a dry run has to
@@ -44,6 +53,46 @@ function claim(ctx: RunContext, p: string): void {
   if (ctx.dryRun) ctx.claimed.add(normalizeFolder(p));
 }
 
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Before an overwrite replaces `existingPath`, sends the old file to the
+ * Recycle Bin so the replacement is recoverable. Returns a message when that
+ * fails (the caller must then not overwrite), or null when it is safe to go on.
+ */
+async function backupExisting(ctx: RunContext, existingPath: string): Promise<string | null> {
+  if (ctx.dryRun || !ctx.backupOverwritten) return null;
+  if (!fs.existsSync(existingPath)) return null;
+  try {
+    await ctx.trash(existingPath);
+    return null;
+  } catch (err) {
+    return (
+      `Not replaced: the existing file could not be moved to the Recycle Bin (${errorText(err)}). ` +
+      'Turn off “Send replaced files to the Recycle Bin” in Settings to overwrite without a backup.'
+    );
+  }
+}
+
+/** Backs up every existing file that extracting `zip` into `targetDir` would overwrite. */
+async function backupReplacedEntries(ctx: RunContext, zip: AdmZip, targetDir: string): Promise<string | null> {
+  if (ctx.dryRun || !ctx.backupOverwritten) return null;
+  const root = path.resolve(targetDir);
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue;
+    const target = path.resolve(root, entry.entryName.replace(/\\/g, '/').replace(/^\/+/, ''));
+    // adm-zip refuses to write outside the folder, so there is nothing to back up out there either.
+    if (target !== root && !target.startsWith(root + path.sep)) continue;
+    if (fs.existsSync(target) && fs.statSync(target).isFile()) {
+      const failure = await backupExisting(ctx, target);
+      if (failure) return failure;
+    }
+  }
+  return null;
+}
+
 interface Candidate {
   filePath: string;
   mtimeMs: number;
@@ -54,6 +103,7 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
   const ctx: RunContext = {
     trash: options.trash ?? electronTrash,
     dryRun: options.dryRun ?? false,
+    backupOverwritten: options.backupOverwritten ?? true,
     claimed: new Set(),
   };
   const startedAt = new Date();
@@ -63,13 +113,16 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
   // Mappings are validated when saved, but a database edited by hand, an
   // older build, or an imported file could still hold one that feeds on its
   // own output -- refuse to run it rather than loop.
-  const pathProblem = validateMappingPaths(mapping);
-  if (pathProblem) {
+  // Likewise a filter that can never evaluate (bad regex, size like "5MB",
+  // unparseable date). Fail the mapping once, visibly, instead of throwing out
+  // of the whole job or quietly matching nothing.
+  const configProblem = validateMappingPaths(mapping) ?? validateFilters(mapping.filters);
+  if (configProblem) {
     outcomes.push({
       sourcePath: sourceRoot,
       destPath: mapping.destPath || null,
       outcome: 'error',
-      reason: pathProblem,
+      reason: configProblem,
       sizeBytes: null,
     });
     return buildRunResult(startedAt, new Date(), outcomes);
@@ -85,18 +138,15 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
         continue;
       }
 
-      if (
-        !evaluateFilters(
-          entryPath,
-          { size: stat.isDirectory() ? 0 : stat.size, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs },
-          mapping.filters,
-          mapping.filterMatchMode
-        )
-      ) {
-        continue;
-      }
+      const matched = matchesMapping(
+        mapping,
+        entryPath,
+        { size: stat.isDirectory() ? 0 : stat.size, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs },
+        outcomes
+      );
+      if (!matched) continue;
 
-      zipEntry(mapping, mapping.destPath, entryPath, stat, outcomes, ctx);
+      await zipEntry(mapping, mapping.destPath, entryPath, stat, outcomes, ctx);
     }
     return buildRunResult(startedAt, new Date(), outcomes);
   }
@@ -122,16 +172,13 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
       continue;
     }
 
-    if (
-      !evaluateFilters(
-        filePath,
-        { size: stat.size, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs },
-        mapping.filters,
-        mapping.filterMatchMode
-      )
-    ) {
-      continue;
-    }
+    const matched = matchesMapping(
+      mapping,
+      filePath,
+      { size: stat.size, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs },
+      outcomes
+    );
+    if (!matched) continue;
 
     candidates.push({ filePath, mtimeMs: stat.mtimeMs, stat });
   }
@@ -154,6 +201,24 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
   }
 
   return buildRunResult(startedAt, new Date(), outcomes);
+}
+
+/**
+ * Filters were validated up front, so evaluating one should never throw; if it
+ * somehow does, that file is reported as an error instead of aborting the run.
+ */
+function matchesMapping(
+  mapping: MappingConfig,
+  filePath: string,
+  stat: { size: number; mtimeMs: number; birthtimeMs: number },
+  outcomes: FileOutcome[]
+): boolean {
+  try {
+    return evaluateFilters(filePath, stat, mapping.filters, mapping.filterMatchMode);
+  } catch (err) {
+    outcomes.push({ sourcePath: filePath, destPath: null, outcome: 'error', reason: errorText(err), sizeBytes: stat.size });
+    return false;
+  }
 }
 
 async function actOnFile(
@@ -211,6 +276,13 @@ async function actOnFile(
       moveOrCopy(filePath, resolved, mapping.actionType, outcomes, reason, stat.size, ctx);
       return;
     }
+
+    // Overwrite: keep the file being replaced recoverable.
+    const failure = await backupExisting(ctx, destPath);
+    if (failure) {
+      outcomes.push({ sourcePath: filePath, destPath, outcome: 'error', reason: failure, sizeBytes: stat.size });
+      return;
+    }
   }
 
   moveOrCopy(filePath, destPath, mapping.actionType, outcomes, reason, stat.size, ctx);
@@ -251,14 +323,21 @@ async function extractZipEntry(
   }
 
   try {
+    // Opening the archive only reads it, and in a preview it surfaces a
+    // corrupt zip before the real run does.
+    const zip = new AdmZip(filePath);
     if (ctx.dryRun) {
-      // Opening the archive only reads it, and it surfaces a corrupt zip in
-      // the preview instead of on the real run.
-      new AdmZip(filePath);
       claim(ctx, finalDir);
     } else {
+      if (mapping.conflictPolicy === 'overwrite' && finalDir === targetDir) {
+        const failure = await backupReplacedEntries(ctx, zip, finalDir);
+        if (failure) {
+          outcomes.push({ sourcePath: filePath, destPath: finalDir, outcome: 'error', reason: failure, sizeBytes: stat.size });
+          return;
+        }
+      }
       fs.mkdirSync(finalDir, { recursive: true });
-      new AdmZip(filePath).extractAllTo(finalDir, true);
+      zip.extractAllTo(finalDir, true);
     }
     outcomes.push({ sourcePath: filePath, destPath: finalDir, outcome: 'extracted', reason, sizeBytes: stat.size });
   } catch (err) {
@@ -282,14 +361,14 @@ async function extractZipEntry(
 }
 
 /** Compresses a top-level source file or folder into destRoot/<name>.zip, leaving the original in place. */
-function zipEntry(
+async function zipEntry(
   mapping: MappingConfig,
   destRoot: string,
   entryPath: string,
   stat: fs.Stats,
   outcomes: FileOutcome[],
   ctx: RunContext
-): void {
+): Promise<void> {
   const name = path.basename(entryPath);
   const targetZip = path.join(destRoot, `${name}.zip`);
   const size = stat.isDirectory() ? null : stat.size;
@@ -304,6 +383,13 @@ function zipEntry(
     }
     reason = `conflict_${mapping.conflictPolicy}`;
     finalZip = resolved;
+    if (resolved === targetZip) {
+      const failure = await backupExisting(ctx, targetZip);
+      if (failure) {
+        outcomes.push({ sourcePath: entryPath, destPath: finalZip, outcome: 'error', reason: failure, sizeBytes: size });
+        return;
+      }
+    }
   }
 
   try {

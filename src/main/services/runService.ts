@@ -67,7 +67,9 @@ async function runJobSteps(
 
   for (const mapping of job.steps) {
     if (!mapping.enabled) continue;
-    const result = await runMapping(repo.toMappingConfig(mapping));
+    // Read per step so flipping the setting takes effect for the next step.
+    const backupOverwritten = repo.getOverwriteBackup(db);
+    const result = await runMapping(repo.toMappingConfig(mapping), { backupOverwritten });
     const status = computeRunStatus(result);
     const runId = repo.recordRun(db, {
       mappingId: mapping.id,

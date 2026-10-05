@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CreateMappingInput, FilterRule, mappingInUseMessage, StepPreview } from '../../shared/types';
 import { validateMappingPaths } from '../../shared/pathSafety';
+import { validateFilters } from '../../shared/validation';
 import FilterRow from '../components/FilterRow';
 import PreviewDialog from '../components/PreviewDialog';
 import { errorMessage } from '../utils/errors';
@@ -73,6 +74,12 @@ export default function MappingEditor() {
           ? 'Name, source folder, and destination folder are all required.'
           : 'Name and source folder are required.'
       );
+      return null;
+    }
+
+    const filterProblem = validateFilters(filters);
+    if (filterProblem) {
+      setError(filterProblem);
       return null;
     }
 
@@ -326,6 +333,8 @@ export default function MappingEditor() {
         <p className="muted">
           This mapping {actionType === 'delete' ? 'deletes files' : 'can replace existing files'}. Use Preview to
           check exactly which files it would touch before you rely on it.
+          {actionType !== 'delete' &&
+            ' Replaced files are sent to the Recycle Bin first (you can change this in Settings).'}
         </p>
       )}
 
