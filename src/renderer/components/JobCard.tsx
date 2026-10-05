@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { JobRecord, RunStats } from '../../shared/types';
+import { errorMessage } from '../utils/errors';
 
 function scheduleSummary(record: JobRecord): string {
   if (record.scheduleType === 'interval') return `Every ${record.scheduleIntervalMinutes} min`;
@@ -55,7 +56,7 @@ export default function JobCard({ record, onChanged }: Props) {
       );
       setStats(await window.fileshuttleAPI.jobs.getStats(record.id));
     } catch (err) {
-      setStatus(`Run failed: ${String(err)}`);
+      setStatus(`Run failed: ${errorMessage(err)}`);
     } finally {
       setRunning(false);
     }

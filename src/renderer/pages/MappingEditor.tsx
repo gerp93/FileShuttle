@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CreateMappingInput, FilterRule, mappingInUseMessage } from '../../shared/types';
+import { validateMappingPaths } from '../../shared/pathSafety';
 import FilterRow from '../components/FilterRow';
+import { errorMessage } from '../utils/errors';
 
 const ACTION_TYPES = [
   ['move', 'Move to destination folder'],
@@ -71,6 +73,17 @@ export default function MappingEditor() {
       return null;
     }
 
+    const pathProblem = validateMappingPaths({
+      actionType,
+      sourcePath: trimmedSource,
+      destPath: trimmedDest,
+      recursive,
+    });
+    if (pathProblem) {
+      setError(pathProblem);
+      return null;
+    }
+
     let keepNewest: number | null = null;
     if (actionType !== 'copy' && actionType !== 'zip' && keepNewestEnabled) {
       if (!/^\d+$/.test(keepNewestCount.trim()) || parseInt(keepNewestCount.trim(), 10) < 1) {
@@ -102,10 +115,15 @@ export default function MappingEditor() {
   const save = async () => {
     const input = buildInput();
     if (!input) return;
-    if (isNew) {
-      await window.fileshuttleAPI.mappings.create(input);
-    } else {
-      await window.fileshuttleAPI.mappings.update(mappingId!, input);
+    try {
+      if (isNew) {
+        await window.fileshuttleAPI.mappings.create(input);
+      } else {
+        await window.fileshuttleAPI.mappings.update(mappingId!, input);
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+      return;
     }
     navigate('/mappings');
   };
@@ -127,7 +145,7 @@ export default function MappingEditor() {
       navigate('/mappings');
     } catch (err) {
       setConfirmDelete(false);
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
   };
 

@@ -2,7 +2,7 @@ import { FSWatcher, watch } from 'chokidar';
 import { Database } from 'sql.js';
 import { JobRecord } from '../../shared/types';
 import * as repo from '../database/repository';
-import { executeJob } from '../services/runService';
+import { executeJob, JobAlreadyRunningError } from '../services/runService';
 
 type WatchedRunCallback = (jobId: number, result: import('../../shared/types').RunResult) => void;
 
@@ -80,6 +80,12 @@ export class WatcherService {
         const result = await executeJob(this.db, jobId, 'scheduled');
         this.onWatchedRunComplete?.(jobId, result);
       } catch (err) {
+        if (err instanceof JobAlreadyRunningError) {
+          // Files landed while the job was mid-run. Try again shortly so they
+          // aren't left waiting for the next unrelated file event.
+          this.scheduleRun(jobId);
+          return;
+        }
         console.error(`Watched run failed for job_id=${jobId}`, err);
       }
     })();

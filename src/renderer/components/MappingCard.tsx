@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { mappingInUseMessage, MappingRecord, RunStats } from '../../shared/types';
+import { errorMessage } from '../utils/errors';
 
 const CONFLICT_LABELS: Record<string, string> = {
   skip: 'Skip duplicates',
@@ -92,7 +93,7 @@ export default function MappingCard({ record, onChanged }: Props) {
       onChanged();
     } catch (err) {
       setConfirmDelete(false);
-      setDeleteError(err instanceof Error ? err.message : String(err));
+      setDeleteError(errorMessage(err));
     }
   };
 
@@ -113,7 +114,7 @@ export default function MappingCard({ record, onChanged }: Props) {
       setShowClone(false);
       onChanged();
     } catch (err) {
-      setCloneError(err instanceof Error ? err.message : String(err));
+      setCloneError(errorMessage(err));
     }
   };
 

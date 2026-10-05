@@ -8,18 +8,53 @@ export function persistDb(db: Database): void {
   saveDatabase(db);
 }
 
+/** Thrown when a run is requested for a job that is already running (or queued to run). */
+export class JobAlreadyRunningError extends Error {
+  constructor(public readonly jobId: number) {
+    super('This job is already running. Wait for it to finish, then try again.');
+    this.name = 'JobAlreadyRunningError';
+  }
+}
+
+// Two runs touching the same folders at once would race each other (both see
+// the same file, one moves it out from under the other, conflicts get
+// mis-resolved). So:
+//   - a given job can only be queued/running once at a time, and
+//   - all runs (and undos) execute one after another, never in parallel.
+const activeJobIds = new Set<number>();
+let queueTail: Promise<unknown> = Promise.resolve();
+
+function runExclusive<T>(task: () => Promise<T>): Promise<T> {
+  const result = queueTail.then(task, task);
+  queueTail = result.catch(() => undefined);
+  return result;
+}
+
+export function isJobActive(jobId: number): boolean {
+  return activeJobIds.has(jobId);
+}
+
 export async function executeJob(
   db: Database,
   jobId: number,
   triggerType: 'manual' | 'scheduled'
 ): Promise<RunResult> {
-  const job = repo.getJob(db, jobId);
-  if (!job) {
-    throw new Error(`No job with id ${jobId}`);
+  if (activeJobIds.has(jobId)) {
+    throw new JobAlreadyRunningError(jobId);
   }
-  const results = await runJobSteps(db, job, triggerType);
-  persistDb(db);
-  return aggregateResults(results);
+  activeJobIds.add(jobId);
+  try {
+    return await runExclusive(async () => {
+      const job = repo.getJob(db, jobId);
+      if (!job) {
+        throw new Error(`No job with id ${jobId}`);
+      }
+      const results = await runJobSteps(db, job, triggerType);
+      return aggregateResults(results);
+    });
+  } finally {
+    activeJobIds.delete(jobId);
+  }
 }
 
 async function runJobSteps(
@@ -44,6 +79,10 @@ async function runJobSteps(
       jobId: job.id,
       jobNameSnapshot: job.name,
     });
+    // Save after every step, not once at the end: if the app dies between
+    // steps, the files already moved still have a history row (and so can be
+    // undone) instead of vanishing without a trace.
+    persistDb(db);
     results.push(result);
     triggeredByRunId = runId;
   }
@@ -81,28 +120,30 @@ function aggregateResults(results: RunResult[]): RunResult {
   };
 }
 
-export function executeUndo(db: Database, runId: number): RunResult {
-  const originalRun = repo.getRun(db, runId);
-  if (!originalRun) {
-    throw new Error(`No run with id ${runId}`);
-  }
+export function executeUndo(db: Database, runId: number): Promise<RunResult> {
+  return runExclusive(async () => {
+    const originalRun = repo.getRun(db, runId);
+    if (!originalRun) {
+      throw new Error(`No run with id ${runId}`);
+    }
 
-  const fileOutcomes = repo.getRunDetail(db, runId);
-  const result = undoRun(fileOutcomes);
-  const status = computeRunStatus(result);
+    const fileOutcomes = repo.getRunDetail(db, runId);
+    const result = undoRun(fileOutcomes);
+    const status = computeRunStatus(result);
 
-  const undoRunId = repo.recordRun(db, {
-    mappingId: originalRun.mappingId,
-    mappingNameSnapshot: `Undo of “${baseMappingName(db, originalRun)}”`,
-    triggerType: 'undo',
-    result,
-    status,
-    jobId: originalRun.jobId,
-    jobNameSnapshot: originalRun.jobNameSnapshot,
+    const undoRunId = repo.recordRun(db, {
+      mappingId: originalRun.mappingId,
+      mappingNameSnapshot: `Undo of “${baseMappingName(db, originalRun)}”`,
+      triggerType: 'undo',
+      result,
+      status,
+      jobId: originalRun.jobId,
+      jobNameSnapshot: originalRun.jobNameSnapshot,
+    });
+    repo.markRunUndone(db, runId, undoRunId);
+    persistDb(db);
+    return result;
   });
-  repo.markRunUndone(db, runId, undoRunId);
-  persistDb(db);
-  return result;
 }
 
 function baseMappingName(db: Database, run: { mappingId: number | null; mappingNameSnapshot: string }): string {
@@ -116,14 +157,19 @@ function baseMappingName(db: Database, run: { mappingId: number | null; mappingN
   return snapshot;
 }
 
+/** Runs every enabled job in turn. A job that is already running is skipped, not treated as a failure. */
 export async function executeAllEnabledJobs(
   db: Database,
   triggerType: 'manual' | 'scheduled'
 ): Promise<RunResult[]> {
   const results: RunResult[] = [];
   for (const job of repo.listJobs(db, true)) {
-    results.push(await executeJob(db, job.id, triggerType));
+    try {
+      results.push(await executeJob(db, job.id, triggerType));
+    } catch (err) {
+      if (err instanceof JobAlreadyRunningError) continue;
+      throw err;
+    }
   }
   return results;
 }
-

@@ -294,3 +294,24 @@ describe('undoRun', () => {
     expect(undo.filesErrored).toBe(1);
   });
 });
+
+describe('path safety at run time', () => {
+  it('refuses to run a recursive mapping whose destination is inside its source', async () => {
+    writeFile(path.join(src, 'a.txt'));
+    const result = await runMapping(
+      makeMapping({ sourcePath: src, destPath: path.join(src, 'out'), recursive: true, actionType: 'copy' }),
+      { trash }
+    );
+    expect(result.filesCopied).toBe(0);
+    expect(result.filesErrored).toBe(1);
+    expect(result.fileOutcomes[0].reason).toMatch(/inside the source/);
+    expect(listTree(src)).toEqual(['a.txt']);
+  });
+
+  it('refuses to run when source and destination are the same folder', async () => {
+    writeFile(path.join(src, 'a.txt'));
+    const result = await runMapping(makeMapping({ sourcePath: src, destPath: src, actionType: 'move' }), { trash });
+    expect(result.filesErrored).toBe(1);
+    expect(result.fileOutcomes[0].reason).toMatch(/same folder/);
+  });
+});

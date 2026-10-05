@@ -1,6 +1,7 @@
 import AdmZip from 'adm-zip';
 import * as fs from 'fs';
 import * as path from 'path';
+import { validateMappingPaths } from '../../shared/pathSafety';
 import { FileOutcome, MappingConfig, RunResult } from '../../shared/types';
 import { buildRunResult } from '../database/repository';
 import { evaluateFilters, partitionKeepNewest } from './filters';
@@ -28,6 +29,21 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
   const startedAt = new Date();
   const sourceRoot = mapping.sourcePath;
   const outcomes: FileOutcome[] = [];
+
+  // Mappings are validated when saved, but a database edited by hand, an
+  // older build, or an imported file could still hold one that feeds on its
+  // own output -- refuse to run it rather than loop.
+  const pathProblem = validateMappingPaths(mapping);
+  if (pathProblem) {
+    outcomes.push({
+      sourcePath: sourceRoot,
+      destPath: mapping.destPath || null,
+      outcome: 'error',
+      reason: pathProblem,
+      sizeBytes: null,
+    });
+    return buildRunResult(startedAt, new Date(), outcomes);
+  }
 
   if (mapping.actionType === 'zip') {
     for (const entryPath of iterTopLevelEntries(sourceRoot)) {

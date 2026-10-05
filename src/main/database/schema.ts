@@ -1,11 +1,13 @@
-import initSqlJs, { Database } from 'sql.js';
+import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getEffectiveDbPath } from '../dbLocation';
 import { logStartupStep } from '../startupLog';
+import { loadWithBackupFallback, saveDatabaseFile } from './dbFile';
 
 let dbInstance: Database | null = null;
 let currentDbPath: string | null = null;
+let recoveryNotice: string | null = null;
 
 const STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS mappings (
@@ -393,26 +395,71 @@ export async function initDatabase(dbPath?: string): Promise<Database> {
   dbPath = dbPath ?? getEffectiveDbPath();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-  let db: Database;
-  if (fs.existsSync(dbPath)) {
-    logStartupStep(`initDatabase: reading existing db file at ${dbPath}`);
-    const buffer = fs.readFileSync(dbPath);
-    logStartupStep('initDatabase: file read, constructing SQL.Database from buffer');
-    db = new SQL.Database(buffer);
-    logStartupStep('initDatabase: SQL.Database constructed from buffer');
-  } else {
-    logStartupStep('initDatabase: no existing db file, constructing a fresh SQL.Database');
-    db = new SQL.Database();
-  }
+  logStartupStep(`initDatabase: opening db file at ${dbPath}`);
+  const loaded = loadWithBackupFallback(dbPath, (bytes) => openValidated(SQL, bytes));
+  const db = loaded.value;
+  logStartupStep('initDatabase: database opened');
+  recoveryNotice = loaded.recoveredFromBackup
+    ? `FileShuttle's database file was unreadable, so it was restored from the most recent automatic backup. ` +
+      `Changes made since that backup may be missing. The damaged file was kept at:\n${loaded.quarantinedTo}`
+    : null;
+  if (recoveryNotice) logStartupStep(`initDatabase: ${recoveryNotice}`);
 
   dbInstance = db;
   currentDbPath = dbPath;
   logStartupStep('initDatabase: running initSchema()');
   initSchema(db);
-  logStartupStep('initDatabase: initSchema() done, calling saveDatabase()');
+  logStartupStep('initDatabase: initSchema() done, repairing orphaned rows');
+  repairIntegrity(db);
+  logStartupStep('initDatabase: integrity repair done, calling saveDatabase()');
   saveDatabase(db, dbPath);
   logStartupStep('initDatabase: saveDatabase() done, returning');
   return db;
+}
+
+/**
+ * An empty or non-database file doesn't throw when sql.js opens it -- only
+ * when first queried -- so probe it here. A zero-byte file is explicitly
+ * rejected: it is what a crash during the old truncate-then-write save left
+ * behind, and treating it as "no data yet" would silently discard the backup.
+ */
+function openValidated(SQL: SqlJsStatic, bytes: Uint8Array | null): Database {
+  if (!bytes) return new SQL.Database();
+  if (bytes.length === 0) throw new Error('the database file is empty');
+
+  const db = new SQL.Database(bytes);
+  try {
+    const verdict = String(db.exec('PRAGMA quick_check')[0]?.values[0]?.[0] ?? '');
+    if (verdict !== 'ok') throw new Error(`integrity check failed: ${verdict}`);
+    return db;
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+}
+
+/**
+ * Foreign keys were effectively off for the whole session in older builds
+ * (see saveDatabase), so deleting a run left its file rows behind, and deleted
+ * mappings/jobs left dangling references. Clear those out once so enforcing
+ * foreign keys again can't trip over them -- e.g. an undo of a run whose
+ * mapping was deleted would otherwise fail with a constraint error.
+ */
+export function repairIntegrity(db: Database): void {
+  db.run('DELETE FROM run_history_files WHERE run_id NOT IN (SELECT id FROM run_history)');
+  db.run('DELETE FROM filter_rules WHERE mapping_id NOT IN (SELECT id FROM mappings)');
+  db.run(
+    'DELETE FROM job_steps WHERE job_id NOT IN (SELECT id FROM jobs) OR mapping_id NOT IN (SELECT id FROM mappings)'
+  );
+  db.run('UPDATE mappings SET next_mapping_id = NULL WHERE next_mapping_id NOT IN (SELECT id FROM mappings)');
+  db.run('UPDATE run_history SET mapping_id = NULL WHERE mapping_id IS NOT NULL AND mapping_id NOT IN (SELECT id FROM mappings)');
+  db.run('UPDATE run_history SET job_id = NULL WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)');
+  db.run(
+    'UPDATE run_history SET undone_by_run_id = NULL WHERE undone_by_run_id IS NOT NULL AND undone_by_run_id NOT IN (SELECT id FROM run_history)'
+  );
+  db.run(
+    'UPDATE run_history SET triggered_by_run_id = NULL WHERE triggered_by_run_id IS NOT NULL AND triggered_by_run_id NOT IN (SELECT id FROM run_history)'
+  );
 }
 
 export function saveDatabase(db: Database, dbPath?: string): void {
@@ -420,7 +467,18 @@ export function saveDatabase(db: Database, dbPath?: string): void {
     dbPath = currentDbPath ?? getEffectiveDbPath();
   }
   const data = db.export();
-  fs.writeFileSync(dbPath, Buffer.from(data));
+  // sql.js's export() closes and re-opens the database, which silently resets
+  // every pragma -- including foreign_keys back to OFF. Without this, the
+  // schema's ON DELETE CASCADE/SET NULL rules never fire after the first save.
+  db.run('PRAGMA foreign_keys = ON');
+  saveDatabaseFile(dbPath, data);
+}
+
+/** Set when startup had to restore the database from its backup; shown to the user once. */
+export function takeRecoveryNotice(): string | null {
+  const notice = recoveryNotice;
+  recoveryNotice = null;
+  return notice;
 }
 
 export function getDatabase(): Database | null {

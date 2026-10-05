@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { Database } from 'sql.js';
-import { initDatabase, saveDatabase } from './database/schema';
+import { initDatabase, saveDatabase, takeRecoveryNotice } from './database/schema';
 import * as repo from './database/repository';
 import {
   pinUserDataPath,
@@ -17,6 +17,7 @@ import {
 } from './dbLocation';
 import { logStartupStep, resetStartupLog } from './startupLog';
 import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
+import { validateMappingPaths } from '../shared/pathSafety';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
 import { SchedulerService } from './scheduler/scheduler';
@@ -265,6 +266,20 @@ function summarizeResult(result: RunCounts): string {
   return parts.length ? parts.join(', ') : 'no matching files';
 }
 
+// Shown after startup completes (not during it, so a dialog can never stall
+// the startup watchdog) when the database had to be restored from its backup.
+function announceDatabaseRecovery(): void {
+  const notice = takeRecoveryNotice();
+  if (!notice) return;
+  void dialog.showMessageBox({
+    type: 'warning',
+    title: 'Database restored from backup',
+    message: 'FileShuttle restored your data from a backup.',
+    detail: notice,
+    buttons: ['OK'],
+  });
+}
+
 function createTray(): void {
   const iconPath = path.join(__dirname, '../../../assets/icon.png');
   tray = new Tray(nativeImage.createFromPath(iconPath));
@@ -358,6 +373,12 @@ function checkForUpdatesNow(): Promise<UpdateCheckResult> {
   });
 }
 
+/** Rejects a mapping whose folders would make it feed on its own output. */
+function assertValidMappingPaths(input: CreateMappingInput): void {
+  const problem = validateMappingPaths(input);
+  if (problem) throw new Error(problem);
+}
+
 function registerIPCHandlers(): void {
   ipcMain.handle('mappings:list', () => {
     return repo.listMappings(db!);
@@ -366,6 +387,7 @@ function registerIPCHandlers(): void {
   ipcMain.handle('mappings:get', (_, id: number) => repo.getMapping(db!, id));
 
   ipcMain.handle('mappings:create', (_, input: CreateMappingInput) => {
+    assertValidMappingPaths(input);
     const id = repo.createMapping(db!, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -374,6 +396,7 @@ function registerIPCHandlers(): void {
   });
 
   ipcMain.handle('mappings:update', (_, id: number, input: UpdateMappingInput) => {
+    assertValidMappingPaths(input);
     repo.updateMapping(db!, id, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -612,6 +635,7 @@ app.whenReady().then(async () => {
     createTray();
     appInitialized = true;
     logStep('main: startup complete');
+    announceDatabaseRecovery();
     scheduler.start();
     watcher.start();
     setupAutoUpdater();
