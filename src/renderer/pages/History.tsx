@@ -329,7 +329,9 @@ export default function History() {
       if (statusFilter !== 'all') return true;
       if (entry.kind === 'standalone' && entry.run.triggerType === 'system') return true;
       if (showEmpty) return true;
-      return entry.kind === 'job' ? runMovedFiles(entry.totals) : runMovedFiles(entry.run);
+      // A failure is meaningful even when nothing moved, so it is never hidden.
+      const counts = entry.kind === 'job' ? entry.totals : entry.run;
+      return runMovedFiles(counts) || counts.filesErrored > 0;
     });
     setEntries(grouped);
     void loadErrorDetails(list);
@@ -448,7 +450,7 @@ export default function History() {
         </label>
         <label className="switch-row">
           <input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} />
-          Show runs with no files moved
+          Show runs with no files moved (failed runs are always shown)
         </label>
       </div>
 
