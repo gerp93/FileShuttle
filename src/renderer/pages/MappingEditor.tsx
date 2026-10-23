@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CreateMappingInput, FilterRule, mappingInUseMessage } from '../../shared/types';
+import { CreateMappingInput, FilterRule, mappingInUseMessage, StepPreview } from '../../shared/types';
+import { validateMappingPaths } from '../../shared/pathSafety';
+import { validateFilters } from '../../shared/validation';
 import FilterRow from '../components/FilterRow';
+import PreviewDialog from '../components/PreviewDialog';
+import { errorMessage } from '../utils/errors';
 
 const ACTION_TYPES = [
   ['move', 'Move to destination folder'],
@@ -37,6 +41,8 @@ export default function MappingEditor() {
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blockedJobs, setBlockedJobs] = useState<string[] | null>(null);
+  const [preview, setPreview] = useState<StepPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   useEffect(() => {
     if (mappingId) {
@@ -71,6 +77,23 @@ export default function MappingEditor() {
       return null;
     }
 
+    const filterProblem = validateFilters(filters);
+    if (filterProblem) {
+      setError(filterProblem);
+      return null;
+    }
+
+    const pathProblem = validateMappingPaths({
+      actionType,
+      sourcePath: trimmedSource,
+      destPath: trimmedDest,
+      recursive,
+    });
+    if (pathProblem) {
+      setError(pathProblem);
+      return null;
+    }
+
     let keepNewest: number | null = null;
     if (actionType !== 'copy' && actionType !== 'zip' && keepNewestEnabled) {
       if (!/^\d+$/.test(keepNewestCount.trim()) || parseInt(keepNewestCount.trim(), 10) < 1) {
@@ -102,12 +125,31 @@ export default function MappingEditor() {
   const save = async () => {
     const input = buildInput();
     if (!input) return;
-    if (isNew) {
-      await window.fileshuttleAPI.mappings.create(input);
-    } else {
-      await window.fileshuttleAPI.mappings.update(mappingId!, input);
+    try {
+      if (isNew) {
+        await window.fileshuttleAPI.mappings.create(input);
+      } else {
+        await window.fileshuttleAPI.mappings.update(mappingId!, input);
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+      return;
     }
     navigate('/mappings');
+  };
+
+  // Previews the form as it stands -- no need to save first.
+  const openPreview = async () => {
+    const input = buildInput();
+    if (!input) return;
+    setPreviewing(true);
+    try {
+      setPreview(await window.fileshuttleAPI.mappings.previewInput(input));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPreviewing(false);
+    }
   };
 
   const requestDelete = async () => {
@@ -127,7 +169,7 @@ export default function MappingEditor() {
       navigate('/mappings');
     } catch (err) {
       setConfirmDelete(false);
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
   };
 
@@ -170,7 +212,8 @@ export default function MappingEditor() {
       {actionType === 'delete' && (
         <p className="error-text">
           Matching files are moved to the Recycle Bin — not to a destination folder.
-          This cannot be undone from within FileShuttle.
+          On Windows, History → Undo can restore them while they are still in the Recycle
+          Bin; once the bin is emptied they are gone.
         </p>
       )}
 
@@ -287,13 +330,33 @@ export default function MappingEditor() {
 
       {error && <p className="error-text">{error}</p>}
 
+      {(actionType === 'delete' || conflictPolicy === 'overwrite') && (
+        <p className="muted">
+          This mapping {actionType === 'delete' ? 'deletes files' : 'can replace existing files'}. Use Preview to
+          check exactly which files it would touch before you rely on it.
+          {actionType !== 'delete' &&
+            ' Replaced files are sent to the Recycle Bin first (you can change this in Settings).'}
+        </p>
+      )}
+
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="primary" onClick={() => void save()}>Save</button>
+        <button className="outline" onClick={() => void openPreview()} disabled={previewing}>
+          {previewing ? 'Checking...' : 'Preview'}
+        </button>
         <button className="outline" onClick={() => navigate('/mappings')}>Cancel</button>
         {!isNew && (
           <button className="outline danger" onClick={() => void requestDelete()}>Delete</button>
         )}
       </div>
+
+      {preview && (
+        <PreviewDialog
+          title={`Preview: ${name.trim() || 'this mapping'}`}
+          steps={[preview]}
+          onClose={() => setPreview(null)}
+        />
+      )}
 
       {confirmDelete && (
         <div className="dialog-overlay">

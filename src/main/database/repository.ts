@@ -2,6 +2,7 @@ import { Database } from 'sql.js';
 import {
   CreateJobInput,
   CreateMappingInput,
+  DEFAULT_UNZIP_LIMITS_SETTING,
   FileOutcome,
   FilterRule,
   HistoryListFilter,
@@ -13,7 +14,9 @@ import {
   RunStats,
   RunSummary,
   UpdateJobInput,
+  UnzipLimitsSetting,
   UpdateMappingInput,
+  validateUnzipLimits,
 } from '../../shared/types';
 import { lastInsertId, queryAll, queryOne, run, toBool, toInt } from './dbHelpers';
 
@@ -418,6 +421,8 @@ function rowToJob(db: Database, row: Record<string, unknown>): JobRecord {
     scheduleDailyTime: row.schedule_daily_time ? String(row.schedule_daily_time) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    catchUp: toBool(row.catch_up),
+    lastRunAt: row.last_run_at ? String(row.last_run_at) : null,
     steps: loadJobSteps(db, id),
   };
 }
@@ -433,11 +438,12 @@ export function createJob(db: Database, input: CreateJobInput): number {
   run(
     db,
     `INSERT INTO jobs
-      (name, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time)
-     VALUES (?, ?, ?, ?, ?)`,
+      (name, enabled, catch_up, schedule_type, schedule_interval_minutes, schedule_daily_time)
+     VALUES (?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.enabled ? 1 : 0,
+      input.catchUp ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
       input.scheduleDailyTime,
@@ -452,12 +458,13 @@ export function updateJob(db: Database, jobId: number, input: UpdateJobInput): v
   run(
     db,
     `UPDATE jobs SET
-      name = ?, enabled = ?, schedule_type = ?, schedule_interval_minutes = ?,
+      name = ?, enabled = ?, catch_up = ?, schedule_type = ?, schedule_interval_minutes = ?,
       schedule_daily_time = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = ?`,
     [
       input.name,
       input.enabled ? 1 : 0,
+      input.catchUp ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
       input.scheduleDailyTime,
@@ -465,6 +472,10 @@ export function updateJob(db: Database, jobId: number, input: UpdateJobInput): v
     ]
   );
   replaceJobSteps(db, jobId, input.mappingIds);
+}
+
+export function setJobLastRun(db: Database, jobId: number, whenIso: string): void {
+  run(db, 'UPDATE jobs SET last_run_at = ? WHERE id = ?', [whenIso, jobId]);
 }
 
 export function deleteJob(db: Database, jobId: number): void {
@@ -562,4 +573,41 @@ export function migrateChainsToJobs(db: Database): void {
   }
 
   setSetting(db, 'jobs_migrated', '1');
+}
+
+const OVERWRITE_BACKUP_KEY = 'overwrite_backup';
+
+/** Whether files replaced by an "overwrite" mapping are first sent to the Recycle Bin. On unless turned off. */
+export function getOverwriteBackup(db: Database): boolean {
+  return getSetting(db, OVERWRITE_BACKUP_KEY, '1') !== '0';
+}
+
+export function setOverwriteBackup(db: Database, enabled: boolean): void {
+  setSetting(db, OVERWRITE_BACKUP_KEY, enabled ? '1' : '0');
+}
+
+const UNZIP_MAX_ENTRIES_KEY = 'unzip_max_entries';
+const UNZIP_MAX_GB_KEY = 'unzip_max_total_gb';
+
+export function getUnzipLimitsSetting(db: Database): UnzipLimitsSetting {
+  const entries = Number(getSetting(db, UNZIP_MAX_ENTRIES_KEY, null));
+  const gb = Number(getSetting(db, UNZIP_MAX_GB_KEY, null));
+  const stored: UnzipLimitsSetting = {
+    maxEntries: entries || DEFAULT_UNZIP_LIMITS_SETTING.maxEntries,
+    maxTotalGB: gb || DEFAULT_UNZIP_LIMITS_SETTING.maxTotalGB,
+  };
+  return validateUnzipLimits(stored) ? DEFAULT_UNZIP_LIMITS_SETTING : stored;
+}
+
+export function setUnzipLimitsSetting(db: Database, limits: UnzipLimitsSetting): void {
+  const problem = validateUnzipLimits(limits);
+  if (problem) throw new Error(problem);
+  setSetting(db, UNZIP_MAX_ENTRIES_KEY, String(limits.maxEntries));
+  setSetting(db, UNZIP_MAX_GB_KEY, String(limits.maxTotalGB));
+}
+
+/** The settings form of the limits, in the units the engine uses. */
+export function getUnzipLimits(db: Database): { maxEntries: number; maxTotalBytes: number } {
+  const { maxEntries, maxTotalGB } = getUnzipLimitsSetting(db);
+  return { maxEntries, maxTotalBytes: Math.floor(maxTotalGB * 1024 ** 3) };
 }

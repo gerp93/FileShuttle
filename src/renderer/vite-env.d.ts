@@ -6,6 +6,7 @@ import type {
   DbLocationInfo,
   FileOutcome,
   HistoryListFilter,
+  JobPreview,
   JobRecord,
   JobRef,
   LogRetentionId,
@@ -14,7 +15,10 @@ import type {
   RunAllSummary,
   RunResult,
   RunStats,
+  RunProgressEvent,
   RunSummary,
+  StepPreview,
+  UnzipLimitsSetting,
   UpdateCheckResult,
   UpdateJobInput,
   UpdateMappingInput,
@@ -31,6 +35,8 @@ interface FileShuttleAPI {
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
     listJobsUsing: (id: number) => Promise<JobRef[]>;
+    preview: (id: number) => Promise<StepPreview>;
+    previewInput: (input: CreateMappingInput) => Promise<StepPreview>;
   };
   jobs: {
     list: () => Promise<JobRecord[]>;
@@ -40,7 +46,12 @@ interface FileShuttleAPI {
     delete: (id: number) => Promise<void>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
+    preview: (id: number) => Promise<JobPreview>;
     run: (id: number) => Promise<RunResult>;
+    cancel: (id: number) => Promise<boolean>;
+    getActive: () => Promise<RunProgressEvent[]>;
+    /** Subscribe to live progress for all runs. Returns an unsubscribe function. */
+    onProgress: (callback: (event: RunProgressEvent) => void) => () => void;
     runAll: () => Promise<RunAllSummary>;
   };
   history: {
@@ -56,6 +67,10 @@ interface FileShuttleAPI {
     setStartup: (enabled: boolean) => Promise<void>;
     getLogRetention: () => Promise<LogRetentionId>;
     setLogRetention: (id: LogRetentionId) => Promise<PurgeResult>;
+    getOverwriteBackup: () => Promise<boolean>;
+    setOverwriteBackup: (enabled: boolean) => Promise<void>;
+    getUnzipLimits: () => Promise<UnzipLimitsSetting>;
+    setUnzipLimits: (limits: UnzipLimitsSetting) => Promise<void>;
   };
   dialogs: {
     pickFolder: (title: string) => Promise<string | null>;

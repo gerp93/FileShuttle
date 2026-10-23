@@ -8,3 +8,11 @@ src/renderer/assets/logo.png
 .DS_Store
 .env
 .env.local
+
+# Leftovers from the pre-Electron Python/Flet version
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Vite dependency cache
+.vite/

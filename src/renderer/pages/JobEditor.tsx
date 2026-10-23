@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { validateJobInput } from '../../shared/schedule';
 import { CreateJobInput, MappingRecord } from '../../shared/types';
+import { errorMessage } from '../utils/errors';
 
 const SCHEDULE_TYPES = [
   ['manual', 'Manual only'],
@@ -8,8 +10,6 @@ const SCHEDULE_TYPES = [
   ['daily_at', 'Daily at a specific time'],
   ['watch', 'Watch folder for new files'],
 ] as const;
-
-const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 export default function JobEditor() {
   const { id } = useParams();
@@ -19,6 +19,7 @@ export default function JobEditor() {
 
   const [name, setName] = useState('');
   const [enabled, setEnabled] = useState(true);
+  const [catchUp, setCatchUp] = useState(false);
   const [scheduleType, setScheduleType] = useState<'manual' | 'interval' | 'daily_at' | 'watch'>('manual');
   const [intervalMinutes, setIntervalMinutes] = useState('30');
   const [dailyTime, setDailyTime] = useState('09:00');
@@ -34,6 +35,7 @@ export default function JobEditor() {
         if (!record) return;
         setName(record.name);
         setEnabled(record.enabled);
+        setCatchUp(record.catchUp);
         setScheduleType(record.scheduleType);
         setIntervalMinutes(String(record.scheduleIntervalMinutes ?? 30));
         setDailyTime(record.scheduleDailyTime ?? '09:00');
@@ -45,51 +47,40 @@ export default function JobEditor() {
   const byId = (mappingId: number) => allMappings.find((m) => m.id === mappingId);
 
   const buildInput = (): CreateJobInput | null => {
-    const trimmedName = name.trim();
-    if (!trimmedName) {
-      setError('Job name is required.');
-      return null;
-    }
-    if (!mappingIds.length) {
-      setError('Add at least one mapping. Jobs run mappings in order.');
-      return null;
-    }
-
-    let scheduleIntervalMinutes: number | null = null;
-    let scheduleDailyTime: string | null = null;
-
-    if (scheduleType === 'interval') {
-      if (!/^\d+$/.test(intervalMinutes.trim())) {
-        setError('Interval must be a whole number of minutes.');
-        return null;
-      }
-      scheduleIntervalMinutes = parseInt(intervalMinutes.trim(), 10);
-    } else if (scheduleType === 'daily_at') {
-      if (!TIME_RE.test(dailyTime.trim())) {
-        setError('Time must be in HH:MM 24-hour format, e.g. 09:00.');
-        return null;
-      }
-      scheduleDailyTime = dailyTime.trim();
-    }
-
-    setError('');
-    return {
-      name: trimmedName,
+    const intervalText = intervalMinutes.trim();
+    const input: CreateJobInput = {
+      name: name.trim(),
       enabled,
+      catchUp: scheduleType !== 'manual' && catchUp,
       scheduleType,
-      scheduleIntervalMinutes,
-      scheduleDailyTime,
+      // Text that isn't a whole number becomes NaN, which validation reports.
+      scheduleIntervalMinutes:
+        scheduleType === 'interval' ? (/^\d+$/.test(intervalText) ? parseInt(intervalText, 10) : NaN) : null,
+      scheduleDailyTime: scheduleType === 'daily_at' ? dailyTime.trim() : null,
       mappingIds,
     };
+
+    const problem = validateJobInput(input);
+    if (problem) {
+      setError(problem);
+      return null;
+    }
+    setError('');
+    return input;
   };
 
   const save = async () => {
     const input = buildInput();
     if (!input) return;
-    if (isNew) {
-      await window.fileshuttleAPI.jobs.create(input);
-    } else {
-      await window.fileshuttleAPI.jobs.update(jobId!, input);
+    try {
+      if (isNew) {
+        await window.fileshuttleAPI.jobs.create(input);
+      } else {
+        await window.fileshuttleAPI.jobs.update(jobId!, input);
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+      return;
     }
     navigate('/');
   };
@@ -152,10 +143,27 @@ export default function JobEditor() {
 
       {scheduleType === 'watch' && (
         <p className="muted" style={{ marginBottom: 12 }}>
-          Runs the moment a new file or folder shows up in the source folder of the first
-          mapping below (the OS notifies FileShuttle directly — there is no polling, so this
-          has effectively no ongoing performance cost). Only fires while FileShuttle is running.
+          Runs the whole job (every mapping, in order) a moment after a new file or folder
+          shows up in the source folder of any mapping below. It does not process only the new
+          file. The OS notifies FileShuttle directly — there is no polling, so this has
+          effectively no ongoing performance cost. Folders the job itself writes into are not
+          watched, so its own output can&apos;t trigger it again.
         </p>
+      )}
+
+      {scheduleType !== 'manual' && (
+        <div style={{ marginBottom: 12 }}>
+          <div className="switch-row">
+            <input type="checkbox" id="job-catchup" checked={catchUp} onChange={(e) => setCatchUp(e.target.checked)} />
+            <label htmlFor="job-catchup">Catch up if FileShuttle wasn&apos;t running</label>
+          </div>
+          <p className="muted" style={{ margin: '4px 0 0' }}>
+            {scheduleType === 'watch'
+              ? 'When FileShuttle starts or the PC wakes, run once to pick up files that arrived in the meantime.'
+              : 'If the app was closed or the PC was asleep when this was due, run once as soon as FileShuttle starts or the PC wakes.'}{' '}
+            Schedules only fire while FileShuttle is running.
+          </p>
+        </div>
       )}
 
       <hr className="divider" />

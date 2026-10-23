@@ -5,6 +5,7 @@ import {
   DbLocationInfo,
   FileOutcome,
   HistoryListFilter,
+  JobPreview,
   JobRecord,
   JobRef,
   LogRetentionId,
@@ -13,7 +14,10 @@ import {
   RunAllSummary,
   RunResult,
   RunStats,
+  RunProgressEvent,
   RunSummary,
+  StepPreview,
+  UnzipLimitsSetting,
   UpdateCheckResult,
   UpdateJobInput,
   UpdateMappingInput,
@@ -30,6 +34,8 @@ export interface FileShuttleAPI {
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
     listJobsUsing: (id: number) => Promise<JobRef[]>;
+    preview: (id: number) => Promise<StepPreview>;
+    previewInput: (input: CreateMappingInput) => Promise<StepPreview>;
   };
   jobs: {
     list: () => Promise<JobRecord[]>;
@@ -39,7 +45,12 @@ export interface FileShuttleAPI {
     delete: (id: number) => Promise<void>;
     setEnabled: (id: number, enabled: boolean) => Promise<void>;
     getStats: (id: number) => Promise<RunStats>;
+    preview: (id: number) => Promise<JobPreview>;
     run: (id: number) => Promise<RunResult>;
+    cancel: (id: number) => Promise<boolean>;
+    getActive: () => Promise<RunProgressEvent[]>;
+    /** Subscribe to live progress for all runs. Returns an unsubscribe function. */
+    onProgress: (callback: (event: RunProgressEvent) => void) => () => void;
     runAll: () => Promise<RunAllSummary>;
   };
   history: {
@@ -55,6 +66,10 @@ export interface FileShuttleAPI {
     setStartup: (enabled: boolean) => Promise<void>;
     getLogRetention: () => Promise<LogRetentionId>;
     setLogRetention: (id: LogRetentionId) => Promise<PurgeResult>;
+    getOverwriteBackup: () => Promise<boolean>;
+    setOverwriteBackup: (enabled: boolean) => Promise<void>;
+    getUnzipLimits: () => Promise<UnzipLimitsSetting>;
+    setUnzipLimits: (limits: UnzipLimitsSetting) => Promise<void>;
   };
   dialogs: {
     pickFolder: (title: string) => Promise<string | null>;
@@ -88,6 +103,8 @@ const api: FileShuttleAPI = {
     setEnabled: (id, enabled) => ipcRenderer.invoke('mappings:setEnabled', id, enabled),
     getStats: (id) => ipcRenderer.invoke('mappings:getStats', id),
     listJobsUsing: (id) => ipcRenderer.invoke('mappings:listJobsUsing', id),
+    preview: (id) => ipcRenderer.invoke('mappings:preview', id),
+    previewInput: (input) => ipcRenderer.invoke('mappings:previewInput', input),
   },
   jobs: {
     list: () => ipcRenderer.invoke('jobs:list'),
@@ -97,7 +114,17 @@ const api: FileShuttleAPI = {
     delete: (id) => ipcRenderer.invoke('jobs:delete', id),
     setEnabled: (id, enabled) => ipcRenderer.invoke('jobs:setEnabled', id, enabled),
     getStats: (id) => ipcRenderer.invoke('jobs:getStats', id),
+    preview: (id) => ipcRenderer.invoke('jobs:preview', id),
     run: (id) => ipcRenderer.invoke('jobs:run', id),
+    cancel: (id) => ipcRenderer.invoke('jobs:cancel', id),
+    getActive: () => ipcRenderer.invoke('jobs:getActive'),
+    onProgress: (callback) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: RunProgressEvent) => callback(payload);
+      ipcRenderer.on('run:progress', handler);
+      return () => {
+        ipcRenderer.removeListener('run:progress', handler);
+      };
+    },
     runAll: () => ipcRenderer.invoke('jobs:runAll'),
   },
   history: {
@@ -113,6 +140,10 @@ const api: FileShuttleAPI = {
     setStartup: (enabled) => ipcRenderer.invoke('settings:setStartup', enabled),
     getLogRetention: () => ipcRenderer.invoke('settings:getLogRetention'),
     setLogRetention: (id) => ipcRenderer.invoke('settings:setLogRetention', id),
+    getOverwriteBackup: () => ipcRenderer.invoke('settings:getOverwriteBackup'),
+    setOverwriteBackup: (enabled) => ipcRenderer.invoke('settings:setOverwriteBackup', enabled),
+    getUnzipLimits: () => ipcRenderer.invoke('settings:getUnzipLimits'),
+    setUnzipLimits: (limits) => ipcRenderer.invoke('settings:setUnzipLimits', limits),
   },
   dialogs: {
     pickFolder: (title) => ipcRenderer.invoke('dialogs:pickFolder', title),

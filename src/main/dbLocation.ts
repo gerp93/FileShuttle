@@ -13,6 +13,13 @@ interface AppConfig {
 // the other's data. Call this before anything else touches
 // app.getPath('userData') (must run before Electron's 'ready' event).
 export function pinUserDataPath(): void {
+  // Lets scripts/smoke-test.js (and anyone debugging) run against a throwaway
+  // data folder instead of the real dev or installed one.
+  const override = process.env.FILESHUTTLE_USER_DATA_DIR;
+  if (override) {
+    app.setPath('userData', override);
+    return;
+  }
   const dirName = app.isPackaged ? 'fileshuttle' : 'fileshuttle-dev';
   app.setPath('userData', path.join(app.getPath('appData'), dirName));
 }

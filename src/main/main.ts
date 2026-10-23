@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { Database } from 'sql.js';
-import { initDatabase, saveDatabase } from './database/schema';
+import { initDatabase, saveDatabase, takeRecoveryNotice } from './database/schema';
 import * as repo from './database/repository';
 import {
   pinUserDataPath,
@@ -17,7 +17,17 @@ import {
 } from './dbLocation';
 import { logStartupStep, resetStartupLog } from './startupLog';
 import { attachContextMenu, setupApplicationMenu } from './menu';
-import { executeAllEnabledJobs, executeJob, executeUndo } from './services/runService';
+import {
+  cancelJob,
+  executeAllEnabledJobs,
+  executeJob,
+  executeUndo,
+  getActiveRuns,
+  setRunProgressListener,
+} from './services/runService';
+import { inputToConfig, previewJob, previewMapping } from './services/previewService';
+import { validateJobInput } from '../shared/schedule';
+import { validateMappingInput } from '../shared/validation';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
 import { SchedulerService } from './scheduler/scheduler';
@@ -29,9 +39,11 @@ import {
   LogRetentionId,
   RunAllSummary,
   RunResult,
+  UnzipLimitsSetting,
   UpdateCheckResult,
   UpdateJobInput,
   UpdateMappingInput,
+  validateUnzipLimits,
 } from '../shared/types';
 
 pinUserDataPath();
@@ -268,6 +280,20 @@ function summarizeResult(result: RunCounts): string {
   return parts.length ? parts.join(', ') : 'no matching files';
 }
 
+// Shown after startup completes (not during it, so a dialog can never stall
+// the startup watchdog) when the database had to be restored from its backup.
+function announceDatabaseRecovery(): void {
+  const notice = takeRecoveryNotice();
+  if (!notice) return;
+  void dialog.showMessageBox({
+    type: 'warning',
+    title: 'Database restored from backup',
+    message: 'FileShuttle restored your data from a backup.',
+    detail: notice,
+    buttons: ['OK'],
+  });
+}
+
 function createTray(): void {
   const iconPath = path.join(__dirname, '../../../assets/icon.png');
   tray = new Tray(nativeImage.createFromPath(iconPath));
@@ -361,6 +387,18 @@ function checkForUpdatesNow(): Promise<UpdateCheckResult> {
   });
 }
 
+/** Rejects a mapping that is incomplete, has an unusable filter, or would feed on its own output. */
+function assertValidMapping(input: CreateMappingInput): void {
+  const problem = validateMappingInput(input);
+  if (problem) throw new Error(problem);
+}
+
+/** Rejects a job with no name/steps or an unusable schedule (e.g. a 0-minute interval). */
+function assertValidJob(input: CreateJobInput): void {
+  const problem = validateJobInput(input);
+  if (problem) throw new Error(problem);
+}
+
 function registerIPCHandlers(): void {
   ipcMain.handle('mappings:list', () => {
     return repo.listMappings(db!);
@@ -369,6 +407,7 @@ function registerIPCHandlers(): void {
   ipcMain.handle('mappings:get', (_, id: number) => repo.getMapping(db!, id));
 
   ipcMain.handle('mappings:create', (_, input: CreateMappingInput) => {
+    assertValidMapping(input);
     const id = repo.createMapping(db!, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -377,6 +416,7 @@ function registerIPCHandlers(): void {
   });
 
   ipcMain.handle('mappings:update', (_, id: number, input: UpdateMappingInput) => {
+    assertValidMapping(input);
     repo.updateMapping(db!, id, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -398,6 +438,18 @@ function registerIPCHandlers(): void {
     return newId;
   });
 
+  ipcMain.handle('mappings:preview', async (_, id: number) => {
+    const mapping = repo.getMapping(db!, id);
+    if (!mapping) throw new Error(`No mapping with id ${id}`);
+    return previewMapping(repo.toMappingConfig(mapping), { unzipLimits: repo.getUnzipLimits(db!) });
+  });
+
+  // Previews the editor's current, possibly unsaved, form values.
+  ipcMain.handle('mappings:previewInput', async (_, input: CreateMappingInput) => {
+    assertValidMapping(input);
+    return previewMapping(inputToConfig(input), { unzipLimits: repo.getUnzipLimits(db!) });
+  });
+
   ipcMain.handle('mappings:listJobsUsing', (_, id: number) => repo.listJobsUsingMapping(db!, id));
 
   ipcMain.handle('mappings:setEnabled', (_, id: number, enabled: boolean) => {
@@ -414,6 +466,7 @@ function registerIPCHandlers(): void {
   ipcMain.handle('jobs:get', (_, id: number) => repo.getJob(db!, id));
 
   ipcMain.handle('jobs:create', (_, input: CreateJobInput) => {
+    assertValidJob(input);
     const id = repo.createJob(db!, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -422,6 +475,7 @@ function registerIPCHandlers(): void {
   });
 
   ipcMain.handle('jobs:update', (_, id: number, input: UpdateJobInput) => {
+    assertValidJob(input);
     repo.updateJob(db!, id, input);
     saveDatabase(db!);
     scheduler?.reloadJobs();
@@ -443,6 +497,19 @@ function registerIPCHandlers(): void {
   });
 
   ipcMain.handle('jobs:getStats', (_, id: number) => repo.getJobStats(db!, id));
+
+  ipcMain.handle('jobs:preview', (_, id: number) => previewJob(db!, id));
+
+  ipcMain.handle('jobs:cancel', (_, id: number) => cancelJob(id));
+
+  ipcMain.handle('jobs:getActive', () => getActiveRuns());
+
+  // Progress for every run, manual or scheduled, goes to whichever windows are open.
+  setRunProgressListener((event) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('run:progress', event);
+    }
+  });
 
   ipcMain.handle('jobs:run', async (_, id: number): Promise<RunResult> => {
     return executeJob(db!, id, 'manual');
@@ -481,6 +548,22 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('settings:setStartup', (_, enabled: boolean) => {
     setStartupEnabled(enabled);
+  });
+
+  ipcMain.handle('settings:getOverwriteBackup', () => repo.getOverwriteBackup(db!));
+
+  ipcMain.handle('settings:setOverwriteBackup', (_, enabled: boolean) => {
+    repo.setOverwriteBackup(db!, enabled);
+    saveDatabase(db!);
+  });
+
+  ipcMain.handle('settings:getUnzipLimits', () => repo.getUnzipLimitsSetting(db!));
+
+  ipcMain.handle('settings:setUnzipLimits', (_, limits: UnzipLimitsSetting) => {
+    const problem = validateUnzipLimits(limits);
+    if (problem) throw new Error(problem);
+    repo.setUnzipLimitsSetting(db!, limits);
+    saveDatabase(db!);
   });
 
   ipcMain.handle('settings:getLogRetention', () => getLogRetention(db!));
@@ -617,9 +700,21 @@ app.whenReady().then(async () => {
     createTray();
     appInitialized = true;
     logStep('main: startup complete');
+    announceDatabaseRecovery();
     scheduler.start();
     watcher.start();
+    // The app wasn't running while any schedule that fired since it last ran.
+    scheduler.catchUp();
+    watcher.catchUp();
     setupAutoUpdater();
+
+    // Timers are unreliable across sleep, and files may have landed while the PC
+    // was asleep: rebuild the schedules and pick up anything that was missed.
+    powerMonitor.on('resume', () => {
+      scheduler?.reloadJobs();
+      scheduler?.catchUp();
+      watcher?.catchUp();
+    });
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

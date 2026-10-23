@@ -3,6 +3,7 @@ import {
   computeRunStatus,
   FileOutcome,
   MappingRecord,
+  outcomeReasonLabel,
   RUN_STATUSES,
   RunStatus,
   runStatusClass,
@@ -10,6 +11,8 @@ import {
   runStatusMeaning,
   RunSummary,
 } from '../../shared/types';
+import { describeUndo, planUndo, summarizeUndoPlan } from '../../shared/undoPlan';
+import { errorMessage } from '../utils/errors';
 
 type Counts = Pick<
   RunSummary,
@@ -35,14 +38,15 @@ interface StandaloneHistoryEntry {
 
 type HistoryEntry = JobHistoryGroup | StandaloneHistoryEntry;
 
-function runMovedFiles(run: Counts): boolean {
+/** Whether a run has anything Undo can act on. An undo run can only be reversed for its moves. */
+function canUndo(run: RunSummary): boolean {
+  if (run.triggerType === 'system' || run.undoneByRunId) return false;
+  if (run.triggerType === 'undo') return run.filesMoved > 0;
   return run.filesMoved + run.filesCopied + run.filesDeleted + run.filesExtracted + run.filesZipped > 0;
 }
 
-function reasonLabel(reason: string | null): string | null {
-  if (!reason) return null;
-  if (reason === 'kept_newest') return 'kept (newest)';
-  return reason;
+function runMovedFiles(run: Counts): boolean {
+  return run.filesMoved + run.filesCopied + run.filesDeleted + run.filesExtracted + run.filesZipped > 0;
 }
 
 function actionSummary(run: Counts, actionType: string | null): string {
@@ -196,9 +200,31 @@ function FileDetails({ expanded }: { expanded: FileOutcome[] | undefined }) {
         <div key={i} className="run-detail">
           {detail.outcome.toUpperCase().padEnd(8)} {detail.sourcePath}
           {detail.destPath ? `  →  ${detail.destPath}` : ''}
-          {reasonLabel(detail.reason) ? `  (${reasonLabel(detail.reason)})` : ''}
+          {outcomeReasonLabel(detail.reason) ? `  (${outcomeReasonLabel(detail.reason)})` : ''}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** How many failed files a run row spells out before pointing at the full list. */
+const ERROR_LINES_SHOWN = 5;
+
+/** The reasons a run had errors, visible without opening the row. */
+function ErrorLines({ errors, total }: { errors: FileOutcome[] | undefined; total: number }) {
+  if (!errors?.length) return null;
+  const shown = errors.slice(0, ERROR_LINES_SHOWN);
+  const hidden = total - shown.length;
+  return (
+    <div className="run-errors" role="alert">
+      {shown.map((detail, i) => (
+        <div key={i} className="run-detail">
+          <strong>{detail.sourcePath}</strong>
+          {detail.destPath ? `  →  ${detail.destPath}` : ''}
+          <div>{outcomeReasonLabel(detail.reason) ?? 'No reason was recorded for this error.'}</div>
+        </div>
+      ))}
+      {hidden > 0 && <div className="muted">…and {hidden} more. Open this run to see them all.</div>}
     </div>
   );
 }
@@ -208,6 +234,7 @@ function MappingRunRow({
   mapping,
   isOpen,
   expanded,
+  errors,
   onToggle,
   onUndo,
 }: {
@@ -215,6 +242,7 @@ function MappingRunRow({
   mapping: MappingRecord | undefined;
   isOpen: boolean;
   expanded: FileOutcome[] | undefined;
+  errors: FileOutcome[] | undefined;
   onToggle: () => void;
   onUndo: () => void;
 }) {
@@ -245,12 +273,13 @@ function MappingRunRow({
           )}
         </div>
         {!isSystem && <PathLines mapping={mapping} />}
+        {!isOpen && <ErrorLines errors={errors} total={run.filesErrored} />}
         {isOpen && <FileDetails expanded={expanded} />}
       </div>
       <div>
         {isSystem ? null : run.undoneByRunId ? (
           <span className="muted">Undone</span>
-        ) : run.filesMoved > 0 ? (
+        ) : canUndo(run) ? (
           <button className="text" onClick={onUndo}>Undo</button>
         ) : null}
       </div>
@@ -267,10 +296,23 @@ export default function History() {
   const [showEmpty, setShowEmpty] = useState(false);
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [expanded, setExpanded] = useState<Record<number, FileOutcome[]>>({});
+  const [errorDetails, setErrorDetails] = useState<Record<number, FileOutcome[]>>({});
   const [openRuns, setOpenRuns] = useState<Set<number>>(new Set());
   const [openJobs, setOpenJobs] = useState<Set<number>>(new Set());
-  const [confirmUndo, setConfirmUndo] = useState<RunSummary | null>(null);
+  const [confirmUndo, setConfirmUndo] = useState<{ run: RunSummary; lines: string[]; notUndoable: number } | null>(null);
   const [snackbar, setSnackbar] = useState('');
+
+  // Failed runs show why they failed right in the list; fetch just those.
+  const loadErrorDetails = async (list: RunSummary[]) => {
+    const failed = list.filter((run) => run.filesErrored > 0 && run.triggerType !== 'system').slice(0, 50);
+    const loaded = await Promise.all(
+      failed.map(async (run) => {
+        const detail = await window.fileshuttleAPI.history.getDetail(run.id);
+        return [run.id, detail.filter((d) => d.outcome === 'error')] as const;
+      })
+    );
+    setErrorDetails(Object.fromEntries(loaded));
+  };
 
   const load = async () => {
     let list: RunSummary[];
@@ -287,9 +329,12 @@ export default function History() {
       if (statusFilter !== 'all') return true;
       if (entry.kind === 'standalone' && entry.run.triggerType === 'system') return true;
       if (showEmpty) return true;
-      return entry.kind === 'job' ? runMovedFiles(entry.totals) : runMovedFiles(entry.run);
+      // A failure is meaningful even when nothing moved, so it is never hidden.
+      const counts = entry.kind === 'job' ? entry.totals : entry.run;
+      return runMovedFiles(counts) || counts.filesErrored > 0;
     });
     setEntries(grouped);
+    void loadErrorDetails(list);
     setOpenJobs(new Set(grouped.filter((entry): entry is JobHistoryGroup => entry.kind === 'job').map((entry) => entry.rootId)));
   };
 
@@ -326,10 +371,26 @@ export default function History() {
     setOpenJobs(next);
   };
 
+  // Work out, from the run's recorded files, exactly what Undo will do and say so first.
+  const requestUndo = async (run: RunSummary) => {
+    const detail = await window.fileshuttleAPI.history.getDetail(run.id);
+    const plan = planUndo(detail, run.triggerType === 'undo');
+    setConfirmUndo({ run, lines: describeUndo(summarizeUndoPlan(plan)), notUndoable: plan.notUndoable.length });
+  };
+
   const doUndo = async (run: RunSummary) => {
     setConfirmUndo(null);
-    const result = await window.fileshuttleAPI.history.undo(run.id);
-    setSnackbar(`Undo finished: moved back ${result.filesMoved}, skipped ${result.filesSkipped}, errored ${result.filesErrored}.`);
+    try {
+      const result = await window.fileshuttleAPI.history.undo(run.id);
+      const parts: string[] = [];
+      if (result.filesMoved) parts.push(`restored/moved back ${result.filesMoved}`);
+      if (result.filesDeleted) parts.push(`removed ${result.filesDeleted}`);
+      if (result.filesSkipped) parts.push(`skipped ${result.filesSkipped}`);
+      if (result.filesErrored) parts.push(`errored ${result.filesErrored}`);
+      setSnackbar(`Undo finished: ${parts.length ? parts.join(', ') : 'nothing to do'}. Open the new history entry for details.`);
+    } catch (err) {
+      setSnackbar(`Undo failed: ${errorMessage(err)}`);
+    }
     await load();
   };
 
@@ -389,7 +450,7 @@ export default function History() {
         </label>
         <label className="switch-row">
           <input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} />
-          Show runs with no files moved
+          Show runs with no files moved (failed runs are always shown)
         </label>
       </div>
 
@@ -412,8 +473,9 @@ export default function History() {
                   mapping={mappingFor(run)}
                   isOpen={openRuns.has(run.id)}
                   expanded={expanded[run.id]}
+                  errors={errorDetails[run.id]}
                   onToggle={() => void toggleRun(run)}
-                  onUndo={() => setConfirmUndo(run)}
+                  onUndo={() => void requestUndo(run)}
                 />
               </div>
             );
@@ -444,8 +506,9 @@ export default function History() {
                             mapping={mappingFor(run)}
                             isOpen={openRuns.has(run.id)}
                             expanded={expanded[run.id]}
+                            errors={errorDetails[run.id]}
                             onToggle={() => void toggleRun(run)}
-                            onUndo={() => setConfirmUndo(run)}
+                            onUndo={() => void requestUndo(run)}
                           />
                         </div>
                       ))}
@@ -472,13 +535,37 @@ export default function History() {
         <div className="dialog-overlay">
           <div className="dialog">
             <h3>Undo this run?</h3>
-            <p>
-              This will move {confirmUndo.filesMoved} file(s) back to where
-              &quot;{confirmUndo.mappingNameSnapshot}&quot; originally moved them from.
+            <p style={{ marginBottom: 4 }}>
+              Undoing &quot;{confirmUndo.run.mappingNameSnapshot}&quot; will:
+            </p>
+            {confirmUndo.lines.length ? (
+              <ul style={{ marginTop: 4 }}>
+                {confirmUndo.lines.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">Nothing in this run can be undone automatically.</p>
+            )}
+            {confirmUndo.notUndoable > 0 && (
+              <p className="muted">
+                {confirmUndo.notUndoable} item{confirmUndo.notUndoable === 1 ? '' : 's'} can&apos;t be undone
+                automatically and will be left as they are.
+              </p>
+            )}
+            <p className="muted">
+              Nothing is overwritten: a file is only put back if its original spot is free. Restoring from the
+              Recycle Bin only works while the files are still in it (Windows).
             </p>
             <div className="dialog-actions">
               <button className="outline" onClick={() => setConfirmUndo(null)}>Cancel</button>
-              <button className="primary" onClick={() => void doUndo(confirmUndo)}>Undo</button>
+              <button
+                className="primary"
+                disabled={confirmUndo.lines.length === 0}
+                onClick={() => void doUndo(confirmUndo.run)}
+              >
+                Undo
+              </button>
             </div>
           </div>
         </div>

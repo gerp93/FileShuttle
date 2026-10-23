@@ -1,8 +1,9 @@
 import cron from 'node-cron';
 import { Database } from 'sql.js';
+import { isJobOverdue } from '../../shared/schedule';
 import { JobRecord } from '../../shared/types';
 import * as repo from '../database/repository';
-import { executeJob } from '../services/runService';
+import { executeJob, JobAlreadyRunningError } from '../services/runService';
 
 type ScheduledRunCallback = (jobId: number, result: import('../../shared/types').RunResult) => void;
 
@@ -43,6 +44,23 @@ export class SchedulerService {
     }
   }
 
+  /**
+   * Runs, once, every job that opted in to catching up and whose schedule
+   * fired while the app wasn't running (closed, or the PC asleep). Safe to
+   * call repeatedly: a job that has since run is no longer overdue, and one
+   * that is still running is skipped.
+   */
+  catchUp(now: Date = new Date()): number {
+    let started = 0;
+    for (const record of repo.listJobs(this.db, true)) {
+      if (record.catchUp && isJobOverdue(record, now)) {
+        this.runScheduled(record.id);
+        started += 1;
+      }
+    }
+    return started;
+  }
+
   private buildJob(record: JobRecord): ScheduledJob | null {
     if (record.scheduleType === 'interval') {
       if (!record.scheduleIntervalMinutes) return null;
@@ -67,6 +85,12 @@ export class SchedulerService {
         const result = await executeJob(this.db, jobId, 'scheduled');
         this.onScheduledRunComplete?.(jobId, result);
       } catch (err) {
+        if (err instanceof JobAlreadyRunningError) {
+          // The previous run is still going (long job, short interval). Skip
+          // this tick; the next one will pick up whatever is left.
+          console.warn(`Skipping scheduled run for job_id=${jobId}: still running from an earlier trigger`);
+          return;
+        }
         console.error(`Scheduled run failed for job_id=${jobId}`, err);
       }
     })();
