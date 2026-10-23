@@ -207,11 +207,34 @@ function FileDetails({ expanded }: { expanded: FileOutcome[] | undefined }) {
   );
 }
 
+/** How many failed files a run row spells out before pointing at the full list. */
+const ERROR_LINES_SHOWN = 5;
+
+/** The reasons a run had errors, visible without opening the row. */
+function ErrorLines({ errors, total }: { errors: FileOutcome[] | undefined; total: number }) {
+  if (!errors?.length) return null;
+  const shown = errors.slice(0, ERROR_LINES_SHOWN);
+  const hidden = total - shown.length;
+  return (
+    <div className="run-errors" role="alert">
+      {shown.map((detail, i) => (
+        <div key={i} className="run-detail">
+          <strong>{detail.sourcePath}</strong>
+          {detail.destPath ? `  →  ${detail.destPath}` : ''}
+          <div>{outcomeReasonLabel(detail.reason) ?? 'No reason was recorded for this error.'}</div>
+        </div>
+      ))}
+      {hidden > 0 && <div className="muted">…and {hidden} more. Open this run to see them all.</div>}
+    </div>
+  );
+}
+
 function MappingRunRow({
   run,
   mapping,
   isOpen,
   expanded,
+  errors,
   onToggle,
   onUndo,
 }: {
@@ -219,6 +242,7 @@ function MappingRunRow({
   mapping: MappingRecord | undefined;
   isOpen: boolean;
   expanded: FileOutcome[] | undefined;
+  errors: FileOutcome[] | undefined;
   onToggle: () => void;
   onUndo: () => void;
 }) {
@@ -249,6 +273,7 @@ function MappingRunRow({
           )}
         </div>
         {!isSystem && <PathLines mapping={mapping} />}
+        {!isOpen && <ErrorLines errors={errors} total={run.filesErrored} />}
         {isOpen && <FileDetails expanded={expanded} />}
       </div>
       <div>
@@ -271,10 +296,23 @@ export default function History() {
   const [showEmpty, setShowEmpty] = useState(false);
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [expanded, setExpanded] = useState<Record<number, FileOutcome[]>>({});
+  const [errorDetails, setErrorDetails] = useState<Record<number, FileOutcome[]>>({});
   const [openRuns, setOpenRuns] = useState<Set<number>>(new Set());
   const [openJobs, setOpenJobs] = useState<Set<number>>(new Set());
   const [confirmUndo, setConfirmUndo] = useState<{ run: RunSummary; lines: string[]; notUndoable: number } | null>(null);
   const [snackbar, setSnackbar] = useState('');
+
+  // Failed runs show why they failed right in the list; fetch just those.
+  const loadErrorDetails = async (list: RunSummary[]) => {
+    const failed = list.filter((run) => run.filesErrored > 0 && run.triggerType !== 'system').slice(0, 50);
+    const loaded = await Promise.all(
+      failed.map(async (run) => {
+        const detail = await window.fileshuttleAPI.history.getDetail(run.id);
+        return [run.id, detail.filter((d) => d.outcome === 'error')] as const;
+      })
+    );
+    setErrorDetails(Object.fromEntries(loaded));
+  };
 
   const load = async () => {
     let list: RunSummary[];
@@ -294,6 +332,7 @@ export default function History() {
       return entry.kind === 'job' ? runMovedFiles(entry.totals) : runMovedFiles(entry.run);
     });
     setEntries(grouped);
+    void loadErrorDetails(list);
     setOpenJobs(new Set(grouped.filter((entry): entry is JobHistoryGroup => entry.kind === 'job').map((entry) => entry.rootId)));
   };
 
@@ -432,6 +471,7 @@ export default function History() {
                   mapping={mappingFor(run)}
                   isOpen={openRuns.has(run.id)}
                   expanded={expanded[run.id]}
+                  errors={errorDetails[run.id]}
                   onToggle={() => void toggleRun(run)}
                   onUndo={() => void requestUndo(run)}
                 />
@@ -464,6 +504,7 @@ export default function History() {
                             mapping={mappingFor(run)}
                             isOpen={openRuns.has(run.id)}
                             expanded={expanded[run.id]}
+                            errors={errorDetails[run.id]}
                             onToggle={() => void toggleRun(run)}
                             onUndo={() => void requestUndo(run)}
                           />

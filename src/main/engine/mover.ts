@@ -74,6 +74,20 @@ interface RunContext {
   emit: (phase: RunProgress['phase'], force?: boolean) => void;
 }
 
+/**
+ * Why `p` can't be listed, or null when it can be -- or when it just doesn't
+ * exist (a missing source is not an error). Unlike `pathExists`, this keeps the
+ * OS's reason (EACCES, EPERM, a timed-out share, ...) instead of hiding it.
+ */
+async function sourceAccessError(p: string): Promise<string | null> {
+  try {
+    await fs.promises.access(p);
+    return null;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? null : errorText(err);
+  }
+}
+
 export async function pathExists(p: string): Promise<boolean> {
   try {
     await fs.promises.access(p);
@@ -194,12 +208,38 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
   // Scan: list the source folder and stat/filter in bounded parallel batches.
   // Everything here is async, so a huge folder never freezes the app.
   const found: string[] = [];
+  // A source that exists but can't be read (permissions, a share that dropped,
+  // a bad network path) must show up as an error with the OS's reason, not
+  // abort the whole job with nothing recorded. A source that simply isn't
+  // there stays a quiet no-op (the scan below yields nothing for it).
+  const unreadable = await sourceAccessError(sourceRoot);
+  if (unreadable) {
+    outcomes.push({
+      sourcePath: sourceRoot,
+      destPath: mapping.destPath || null,
+      outcome: 'error',
+      reason: `Could not read the source folder: ${unreadable}`,
+      sizeBytes: null,
+    });
+    return finish();
+  }
   const entries = isZip ? iterTopLevelEntries(sourceRoot) : iterCandidateFiles(sourceRoot, mapping.recursive);
-  for await (const entryPath of entries) {
-    if (ctx.signal?.aborted) return finish();
-    found.push(entryPath);
-    ctx.progress.scanned = found.length;
-    ctx.emit('scanning');
+  try {
+    for await (const entryPath of entries) {
+      if (ctx.signal?.aborted) return finish();
+      found.push(entryPath);
+      ctx.progress.scanned = found.length;
+      ctx.emit('scanning');
+    }
+  } catch (err) {
+    // Keep what was found before the failure and say why the scan stopped.
+    outcomes.push({
+      sourcePath: sourceRoot,
+      destPath: null,
+      outcome: 'error',
+      reason: `Scanning the source folder stopped early: ${errorText(err)}`,
+      sizeBytes: null,
+    });
   }
 
   for (let i = 0; i < found.length; i += STAT_BATCH) {

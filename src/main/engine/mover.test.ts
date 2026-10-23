@@ -70,6 +70,17 @@ describe('move', () => {
     );
     expect(result.fileOutcomes).toEqual([]);
   });
+
+  it('reports an error with the OS reason when the source cannot be listed', async () => {
+    const notAFolder = path.join(root, 'file.txt');
+    writeFile(notAFolder, 'x');
+    const result = await runMapping(makeMapping({ sourcePath: notAFolder, destPath: dest }), { trash });
+    expect(result.filesErrored).toBe(1);
+    const [outcome] = result.fileOutcomes;
+    expect(outcome.outcome).toBe('error');
+    expect(outcome.sourcePath).toBe(notAFolder);
+    expect(outcome.reason).toMatch(/Scanning the source folder stopped early: .*(ENOTDIR|not a directory)/i);
+  });
 });
 
 describe('copy', () => {
