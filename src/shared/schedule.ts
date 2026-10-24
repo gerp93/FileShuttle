@@ -7,6 +7,7 @@ import type { CreateJobInput, ScheduleType } from './types';
 
 export const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 export const MAX_INTERVAL_MINUTES = 60 * 24 * 365;
+export const MAX_DAILY_TIMES = 24;
 
 export function parseDailyTime(time: string | null): { hour: number; minute: number } | null {
   const match = time ? TIME_RE.exec(time.trim()) : null;
@@ -22,10 +23,15 @@ export function mostRecentDailyOccurrence(time: string, now: Date): Date | null 
   return occurrence;
 }
 
+/** Trims, drops blanks and duplicates, and sorts HH:MM strings. Invalid entries are kept so validation can report them. */
+export function normalizeDailyTimes(times: readonly string[]): string[] {
+  return [...new Set(times.map((t) => t.trim()).filter(Boolean))].sort();
+}
+
 export interface ScheduledJobState {
   scheduleType: ScheduleType;
   scheduleIntervalMinutes: number | null;
-  scheduleDailyTime: string | null;
+  scheduleDailyTimes: string[];
   /** When the job last ran to completion (ISO), if ever. */
   lastRunAt: string | null;
   /** When the job was created (ISO); stands in for "last ran" if it never has. */
@@ -47,8 +53,11 @@ export function isJobOverdue(job: ScheduledJobState, now: Date): boolean {
   }
 
   if (job.scheduleType === 'daily_at') {
-    const occurrence = job.scheduleDailyTime ? mostRecentDailyOccurrence(job.scheduleDailyTime, now) : null;
-    return occurrence !== null && baseline < occurrence.getTime();
+    // Overdue if any of the set times has come and gone since the job last ran.
+    return job.scheduleDailyTimes.some((time) => {
+      const occurrence = mostRecentDailyOccurrence(time, now);
+      return occurrence !== null && baseline < occurrence.getTime();
+    });
   }
 
   return false;
@@ -66,7 +75,10 @@ export function validateJobInput(input: CreateJobInput): string | null {
     }
     if (minutes > MAX_INTERVAL_MINUTES) return 'The interval can be at most one year.';
   } else if (input.scheduleType === 'daily_at') {
-    if (!parseDailyTime(input.scheduleDailyTime)) return 'Time must be in HH:MM 24-hour format, e.g. 09:00.';
+    const times = normalizeDailyTimes(input.scheduleDailyTimes);
+    if (!times.length) return 'Add at least one time.';
+    if (times.length > MAX_DAILY_TIMES) return `A job can run at most ${MAX_DAILY_TIMES} times a day.`;
+    if (times.some((time) => !parseDailyTime(time))) return 'Times must be in HH:MM 24-hour format, e.g. 09:00.';
   }
   return null;
 }

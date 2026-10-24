@@ -34,7 +34,7 @@ const waitForRuns = async (count: number) => {
 
 function addJob(
   name: string,
-  schedule: { scheduleType: 'interval' | 'daily_at' | 'manual' | 'watch'; minutes?: number; time?: string },
+  schedule: { scheduleType: 'interval' | 'daily_at' | 'manual' | 'watch'; minutes?: number; times?: string[] },
   catchUp: boolean
 ): { jobId: number; src: string; dest: string } {
   const src = path.join(root, `${name}-src`);
@@ -62,7 +62,7 @@ function addJob(
     catchUp,
     scheduleType: schedule.scheduleType,
     scheduleIntervalMinutes: schedule.minutes ?? null,
-    scheduleDailyTime: schedule.time ?? null,
+    scheduleDailyTimes: schedule.times ?? [],
     mappingIds: [mappingId],
   });
   return { jobId, src, dest };
@@ -87,7 +87,7 @@ describe('catchUp', () => {
   });
 
   it('runs an opted-in daily job that missed its time', async () => {
-    const { jobId, dest } = addJob('daily', { scheduleType: 'daily_at', time: '09:00' }, true);
+    const { jobId, dest } = addJob('daily', { scheduleType: 'daily_at', times: ['09:00'] }, true);
     backdate(jobId, '2020-01-01T00:00:00.000Z');
 
     expect(scheduler.catchUp(new Date(2026, 5, 10, 14, 0))).toBe(1);

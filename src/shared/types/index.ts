@@ -235,7 +235,8 @@ export interface JobRecord {
   enabled: boolean;
   scheduleType: ScheduleType;
   scheduleIntervalMinutes: number | null;
-  scheduleDailyTime: string | null;
+  /** Every HH:MM the job runs at when scheduleType is 'daily_at'; sorted, no duplicates. Empty otherwise. */
+  scheduleDailyTimes: string[];
   createdAt: string;
   updatedAt: string;
   /** Run once on start-up/wake if the schedule was missed while the app wasn't running. */
@@ -251,7 +252,7 @@ export interface CreateJobInput {
   catchUp?: boolean;
   scheduleType: ScheduleType;
   scheduleIntervalMinutes: number | null;
-  scheduleDailyTime: string | null;
+  scheduleDailyTimes: string[];
   mappingIds: number[];
 }
 

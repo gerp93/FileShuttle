@@ -18,6 +18,7 @@ import {
   UpdateMappingInput,
   validateUnzipLimits,
 } from '../../shared/types';
+import { normalizeDailyTimes } from '../../shared/schedule';
 import { lastInsertId, queryAll, queryOne, run, toBool, toInt } from './dbHelpers';
 
 function rowToFilterRule(row: Record<string, unknown>): FilterRule {
@@ -410,6 +411,11 @@ function loadJobSteps(db: Database, jobId: number): MappingRecord[] {
   return rows.map((row) => rowToRecord(db, row));
 }
 
+/** Job run times are stored as comma-separated HH:MM text. */
+function parseDailyTimes(value: unknown): string[] {
+  return value ? normalizeDailyTimes(String(value).split(',')) : [];
+}
+
 function rowToJob(db: Database, row: Record<string, unknown>): JobRecord {
   const id = Number(row.id);
   return {
@@ -418,7 +424,7 @@ function rowToJob(db: Database, row: Record<string, unknown>): JobRecord {
     enabled: toBool(row.enabled),
     scheduleType: String(row.schedule_type) as JobRecord['scheduleType'],
     scheduleIntervalMinutes: toInt(row.schedule_interval_minutes),
-    scheduleDailyTime: row.schedule_daily_time ? String(row.schedule_daily_time) : null,
+    scheduleDailyTimes: parseDailyTimes(row.schedule_daily_times),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     catchUp: toBool(row.catch_up),
@@ -434,19 +440,25 @@ function replaceJobSteps(db: Database, jobId: number, mappingIds: number[]): voi
   });
 }
 
+/** Values for schedule_daily_time (the first time, kept so older builds still read a job) and schedule_daily_times. */
+function dailyTimeColumns(times: string[]): [string | null, string | null] {
+  const normalized = normalizeDailyTimes(times);
+  return normalized.length ? [normalized[0], normalized.join(',')] : [null, null];
+}
+
 export function createJob(db: Database, input: CreateJobInput): number {
   run(
     db,
     `INSERT INTO jobs
-      (name, enabled, catch_up, schedule_type, schedule_interval_minutes, schedule_daily_time)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+      (name, enabled, catch_up, schedule_type, schedule_interval_minutes, schedule_daily_time, schedule_daily_times)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.enabled ? 1 : 0,
       input.catchUp ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
-      input.scheduleDailyTime,
+      ...dailyTimeColumns(input.scheduleDailyTimes),
     ]
   );
   const jobId = lastInsertId(db);
@@ -459,7 +471,7 @@ export function updateJob(db: Database, jobId: number, input: UpdateJobInput): v
     db,
     `UPDATE jobs SET
       name = ?, enabled = ?, catch_up = ?, schedule_type = ?, schedule_interval_minutes = ?,
-      schedule_daily_time = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      schedule_daily_time = ?, schedule_daily_times = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = ?`,
     [
       input.name,
@@ -467,7 +479,7 @@ export function updateJob(db: Database, jobId: number, input: UpdateJobInput): v
       input.catchUp ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
-      input.scheduleDailyTime,
+      ...dailyTimeColumns(input.scheduleDailyTimes),
       jobId,
     ]
   );
@@ -567,7 +579,7 @@ export function migrateChainsToJobs(db: Database): void {
       enabled: mapping.enabled,
       scheduleType: mapping.scheduleType,
       scheduleIntervalMinutes: mapping.scheduleIntervalMinutes,
-      scheduleDailyTime: mapping.scheduleDailyTime,
+      scheduleDailyTimes: mapping.scheduleDailyTime ? [mapping.scheduleDailyTime] : [],
       mappingIds,
     });
   }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { validateJobInput } from '../../shared/schedule';
+import { MAX_DAILY_TIMES, validateJobInput } from '../../shared/schedule';
 import { CreateJobInput, MappingRecord } from '../../shared/types';
 import { errorMessage } from '../utils/errors';
 
@@ -22,7 +22,7 @@ export default function JobEditor() {
   const [catchUp, setCatchUp] = useState(false);
   const [scheduleType, setScheduleType] = useState<'manual' | 'interval' | 'daily_at' | 'watch'>('manual');
   const [intervalMinutes, setIntervalMinutes] = useState('30');
-  const [dailyTime, setDailyTime] = useState('09:00');
+  const [dailyTimes, setDailyTimes] = useState<string[]>(['09:00']);
   const [mappingIds, setMappingIds] = useState<number[]>([]);
   const [allMappings, setAllMappings] = useState<MappingRecord[]>([]);
   const [addId, setAddId] = useState('');
@@ -38,7 +38,7 @@ export default function JobEditor() {
         setCatchUp(record.catchUp);
         setScheduleType(record.scheduleType);
         setIntervalMinutes(String(record.scheduleIntervalMinutes ?? 30));
-        setDailyTime(record.scheduleDailyTime ?? '09:00');
+        setDailyTimes(record.scheduleDailyTimes.length ? record.scheduleDailyTimes : ['09:00']);
         setMappingIds(record.steps.map((s) => s.id));
       });
     }
@@ -56,7 +56,7 @@ export default function JobEditor() {
       // Text that isn't a whole number becomes NaN, which validation reports.
       scheduleIntervalMinutes:
         scheduleType === 'interval' ? (/^\d+$/.test(intervalText) ? parseInt(intervalText, 10) : NaN) : null,
-      scheduleDailyTime: scheduleType === 'daily_at' ? dailyTime.trim() : null,
+      scheduleDailyTimes: scheduleType === 'daily_at' ? dailyTimes.map((t) => t.trim()) : [],
       mappingIds,
     };
 
@@ -135,10 +135,34 @@ export default function JobEditor() {
       )}
 
       {scheduleType === 'daily_at' && (
-        <label className="field" style={{ marginBottom: 12 }}>
-          Time (HH:MM, 24-hour)
-          <input type="text" value={dailyTime} onChange={(e) => setDailyTime(e.target.value)} />
-        </label>
+        <div style={{ marginBottom: 12 }}>
+          <div className="muted" style={{ marginBottom: 4 }}>Times (HH:MM, 24-hour)</div>
+          {dailyTimes.map((time, i) => (
+            <div key={i} className="filter-row" style={{ alignItems: 'center' }}>
+              <input
+                type="text"
+                aria-label={`Run time ${i + 1}`}
+                value={time}
+                onChange={(e) => setDailyTimes(dailyTimes.map((t, j) => (j === i ? e.target.value : t)))}
+              />
+              <button
+                className="text danger"
+                title="Remove this time"
+                disabled={dailyTimes.length === 1}
+                onClick={() => setDailyTimes(dailyTimes.filter((_, j) => j !== i))}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <button
+            className="text"
+            disabled={dailyTimes.length >= MAX_DAILY_TIMES}
+            onClick={() => setDailyTimes([...dailyTimes, ''])}
+          >
+            Add time
+          </button>
+        </div>
       )}
 
       {scheduleType === 'watch' && (

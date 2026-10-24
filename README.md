@@ -34,7 +34,7 @@ come from there rather than being reinvented locally.
 - **Preview** — see exactly which files a mapping or job would touch, with
   total size, files that would be replaced, and per-file detail, without
   changing anything. A preview runs the same code as a real run.
-- **Scheduling** — manual only, every N minutes, daily at a set time, or watch
+- **Scheduling** — manual only, every N minutes, daily at one or more set times, or watch
   folders for new files. Watching uses OS filesystem notifications rather than
   polling, so it has no meaningful ongoing cost. Optionally **catch up**: if the
   app wasn't running (or the PC was asleep) when a job was due, it runs once on

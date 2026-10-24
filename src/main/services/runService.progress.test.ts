@@ -57,7 +57,7 @@ function addJobWithFiles(name: string, fileCount: number, steps = 1): number {
     enabled: true,
     scheduleType: 'manual',
     scheduleIntervalMinutes: null,
-    scheduleDailyTime: null,
+    scheduleDailyTimes: [],
     mappingIds,
   });
 }
