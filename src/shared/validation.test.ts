@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { validateFilterRule, validateFilters, validateMappingInput } from './validation';
 import type { CreateMappingInput, FilterRule } from './types';
 
-const rule = (field: FilterRule['field'], operator: FilterRule['operator'], value: string): FilterRule => ({
+const rule = (
+  field: FilterRule['field'],
+  operator: FilterRule['operator'],
+  value: string,
+  group = 0
+): FilterRule => ({
   field,
   operator,
   value,
+  group,
 });
 
 describe('validateFilterRule', () => {
@@ -49,7 +55,7 @@ describe('validateFilterRule', () => {
   });
 
   it('rejects an unknown field', () => {
-    expect(validateFilterRule({ field: 'owner' as FilterRule['field'], operator: 'equals', value: 'x' })).toMatch(
+    expect(validateFilterRule({ field: 'owner' as FilterRule['field'], operator: 'equals', value: 'x', group: 0 })).toMatch(
       /unknown filter field/
     );
   });
@@ -78,7 +84,6 @@ describe('validateMappingInput', () => {
     scheduleIntervalMinutes: null,
     scheduleDailyTime: null,
     filters: [],
-    filterMatchMode: 'all',
     nextMappingId: null,
     actionType: 'move',
     keepNewest: null,

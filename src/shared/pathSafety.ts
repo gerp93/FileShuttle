@@ -8,6 +8,13 @@ import type { ActionType } from './types';
 
 const WINDOWS_PATH = /^([a-zA-Z]:[\\/]|[\\/]{2})/;
 
+/** A typed or pasted folder path with the whitespace and the quotes Explorer's "Copy as path" adds removed. */
+export function cleanFolderInput(raw: string): string {
+  let text = raw.trim();
+  if (text.length >= 2 && /^(["'])[\s\S]*\1$/.test(text)) text = text.slice(1, -1).trim();
+  return text;
+}
+
 /** Canonical form for comparing folders: forward slashes, no trailing slash, case-folded on Windows. */
 export function normalizeFolder(folder: string): string {
   let normalized = folder.trim().replace(/\\/g, '/');

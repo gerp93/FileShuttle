@@ -15,9 +15,6 @@ export type FilterOperator = (typeof FILTER_OPERATORS)[number];
 export const CONFLICT_POLICIES = ['overwrite', 'skip', 'auto_rename'] as const;
 export type ConflictPolicy = (typeof CONFLICT_POLICIES)[number];
 
-export const FILTER_MATCH_MODES = ['all', 'any'] as const;
-export type FilterMatchMode = (typeof FILTER_MATCH_MODES)[number];
-
 export const ACTION_TYPES = ['move', 'copy', 'delete', 'zip', 'unzip'] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
@@ -28,6 +25,11 @@ export interface FilterRule {
   field: FilterField;
   operator: FilterOperator;
   value: string;
+  /**
+   * Rules sharing a group are OR'd (any one is enough); different groups are
+   * AND'd (every group must be satisfied). A rule alone in its group is a plain condition.
+   */
+  group: number;
 }
 
 export interface MappingConfig {
@@ -37,7 +39,6 @@ export interface MappingConfig {
   destPath: string;
   recursive: boolean;
   conflictPolicy: ConflictPolicy;
-  filterMatchMode: FilterMatchMode;
   filters: FilterRule[];
   actionType: ActionType;
   keepNewest: number | null;
@@ -74,7 +75,6 @@ export interface MappingRecord {
   recursive: boolean;
   actionType: ActionType;
   conflictPolicy: ConflictPolicy;
-  filterMatchMode: FilterMatchMode;
   enabled: boolean;
   scheduleType: ScheduleType;
   scheduleIntervalMinutes: number | null;
@@ -196,13 +196,24 @@ export interface CreateMappingInput {
   scheduleIntervalMinutes: number | null;
   scheduleDailyTime: string | null;
   filters: FilterRule[];
-  filterMatchMode: FilterMatchMode;
   nextMappingId: number | null;
   actionType: ActionType;
   keepNewest: number | null;
 }
 
 export type UpdateMappingInput = CreateMappingInput;
+
+export type FolderRole = 'source' | 'destination';
+
+/**
+ * Result of checking a typed folder path. `ok` and `will_create` are usable;
+ * `missing` is a warning (an unplugged drive is a legitimate thing to configure);
+ * `invalid` and `not_folder` can never work.
+ */
+export interface FolderCheck {
+  status: 'ok' | 'will_create' | 'missing' | 'not_folder' | 'invalid';
+  message: string | null;
+}
 
 export interface DbLocationInfo {
   path: string;

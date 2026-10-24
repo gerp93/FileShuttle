@@ -1,3 +1,4 @@
+import { groupFilters } from '../../shared/filterGroups';
 import { FilterRule } from '../../shared/types';
 
 export interface RankedFile {
@@ -26,12 +27,10 @@ export function partitionKeepNewest<T extends RankedFile>(
 export function evaluateFilters(
   filePath: string,
   stat: { size: number; mtimeMs: number; birthtimeMs: number },
-  filters: FilterRule[],
-  matchMode: 'all' | 'any' = 'all'
+  filters: FilterRule[]
 ): boolean {
-  if (!filters.length) return true;
-  const results = filters.map((rule) => matchesFilter(filePath, stat, rule));
-  return matchMode === 'any' ? results.some(Boolean) : results.every(Boolean);
+  // Every group must be satisfied; within a group any one rule is enough.
+  return groupFilters(filters).every((group) => group.some((rule) => matchesFilter(filePath, stat, rule)));
 }
 
 export function matchesFilter(

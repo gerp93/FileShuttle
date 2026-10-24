@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { mappingInUseMessage, MappingRecord, RunStats, StepPreview } from '../../shared/types';
+import { describeFilterLogic } from '../../shared/filterGroups';
 import { errorMessage } from '../utils/errors';
 import PreviewDialog from './PreviewDialog';
 
@@ -163,7 +164,7 @@ export default function MappingCard({ record, onChanged }: Props) {
           <span className="badge">{CONFLICT_LABELS[record.conflictPolicy] ?? record.conflictPolicy}</span>
         )}
         {record.filters.length ? (
-          <span className="badge">{record.filters.length} filter{record.filters.length !== 1 ? 's' : ''} · match {record.filterMatchMode === 'all' ? 'ALL' : 'ANY'}</span>
+          <span className="badge">{describeFilterLogic(record.filters)}</span>
         ) : (
           <span className="badge">All files</span>
         )}

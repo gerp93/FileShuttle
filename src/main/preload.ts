@@ -4,6 +4,8 @@ import {
   CreateMappingInput,
   DbLocationInfo,
   FileOutcome,
+  FolderCheck,
+  FolderRole,
   HistoryListFilter,
   JobPreview,
   JobRecord,
@@ -72,7 +74,8 @@ export interface FileShuttleAPI {
     setUnzipLimits: (limits: UnzipLimitsSetting) => Promise<void>;
   };
   dialogs: {
-    pickFolder: (title: string) => Promise<string | null>;
+    pickFolder: (title: string, startAt?: string) => Promise<string | null>;
+    checkFolder: (folder: string, role: FolderRole) => Promise<FolderCheck>;
   };
   shell: {
     openPath: (filePath: string) => Promise<string>;
@@ -146,7 +149,8 @@ const api: FileShuttleAPI = {
     setUnzipLimits: (limits) => ipcRenderer.invoke('settings:setUnzipLimits', limits),
   },
   dialogs: {
-    pickFolder: (title) => ipcRenderer.invoke('dialogs:pickFolder', title),
+    pickFolder: (title, startAt) => ipcRenderer.invoke('dialogs:pickFolder', title, startAt),
+    checkFolder: (folder, role) => ipcRenderer.invoke('dialogs:checkFolder', folder, role),
   },
   shell: {
     openPath: (filePath) => ipcRenderer.invoke('shell:openPath', filePath),

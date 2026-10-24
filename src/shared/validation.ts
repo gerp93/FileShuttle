@@ -30,6 +30,7 @@ export function validateFilterRule(rule: FilterRule): string | null {
   const allowed = OPERATORS_BY_FIELD[rule.field];
   if (!allowed) return `unknown filter field “${rule.field}”`;
   if (!allowed.includes(rule.operator)) return `“${rule.operator}” isn’t valid for ${FIELD_NAMES[rule.field]}`;
+  if (!Number.isInteger(rule.group) || rule.group < 0) return 'its group number is invalid';
 
   const value = rule.value.trim();
   if (!value) return 'a value is required';

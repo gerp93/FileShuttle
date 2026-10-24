@@ -43,7 +43,6 @@ function addMapping(name: string, src: string, dest: string, actionType: 'move' 
     scheduleIntervalMinutes: null,
     scheduleDailyTime: null,
     filters: [],
-    filterMatchMode: 'all',
     nextMappingId: null,
     actionType,
     keepNewest: null,

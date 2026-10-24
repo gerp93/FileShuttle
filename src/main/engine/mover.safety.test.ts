@@ -33,7 +33,7 @@ describe('unusable filters', () => {
       makeMapping({
         sourcePath: src,
         destPath: dest,
-        filters: [{ field: 'filename_regex', operator: 'matches', value: '([unclosed' }],
+        filters: [{ field: 'filename_regex', operator: 'matches', value: '([unclosed', group: 0 }],
       }),
       { trash }
     );
@@ -50,7 +50,7 @@ describe('unusable filters', () => {
       makeMapping({
         sourcePath: src,
         actionType: 'delete',
-        filters: [{ field: 'size', operator: 'min', value: '5MB' }],
+        filters: [{ field: 'size', operator: 'min', value: '5MB', group: 0 }],
       }),
       { trash }
     );

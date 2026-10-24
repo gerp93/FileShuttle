@@ -86,12 +86,11 @@ describe('previewMapping', () => {
       scheduleIntervalMinutes: null,
       scheduleDailyTime: null,
       filters: [],
-      filterMatchMode: 'any',
       nextMappingId: null,
       actionType: 'copy',
       keepNewest: 3,
     });
-    expect(config).toMatchObject({ id: 0, name: 'draft', actionType: 'copy', keepNewest: 3, filterMatchMode: 'any' });
+    expect(config).toMatchObject({ id: 0, name: 'draft', actionType: 'copy', keepNewest: 3 });
   });
 });
 
@@ -108,7 +107,6 @@ describe('previewJob', () => {
       scheduleIntervalMinutes: null,
       scheduleDailyTime: null,
       filters: [],
-      filterMatchMode: 'all',
       nextMappingId: null,
       actionType: 'move',
       keepNewest: null,

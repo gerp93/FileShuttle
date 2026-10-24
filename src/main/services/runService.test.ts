@@ -39,7 +39,6 @@ function addMapping(name: string, src: string, dest: string, extra: Partial<Para
     scheduleIntervalMinutes: null,
     scheduleDailyTime: null,
     filters: [],
-    filterMatchMode: 'all',
     nextMappingId: null,
     actionType: 'move',
     keepNewest: null,
@@ -117,7 +116,7 @@ describe('executeJob', () => {
     writeFile(path.join(a, 'file.txt'));
     writeFile(path.join(c, 'other.txt'));
     const bad = addMapping('bad-regex', a, path.join(root, 'b'), {
-      filters: [{ field: 'filename_regex', operator: 'matches', value: '(' }],
+      filters: [{ field: 'filename_regex', operator: 'matches', value: '(', group: 0 }],
     });
     const good = addMapping('good', c, path.join(root, 'd'));
     const jobId = addJob('mixed', [bad, good]);

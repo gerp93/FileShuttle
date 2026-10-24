@@ -44,7 +44,6 @@ function addJobWithFiles(name: string, fileCount: number, steps = 1): number {
         scheduleIntervalMinutes: null,
         scheduleDailyTime: null,
         filters: [],
-        filterMatchMode: 'all',
         nextMappingId: null,
         actionType: 'move',
         keepNewest: null,

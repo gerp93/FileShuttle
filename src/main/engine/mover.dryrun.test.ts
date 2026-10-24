@@ -72,7 +72,7 @@ describe('dry run', () => {
         sourcePath: src,
         destPath: dest,
         recursive: true,
-        filters: [{ field: 'extension', operator: 'equals', value: 'txt' }],
+        filters: [{ field: 'extension', operator: 'equals', value: 'txt', group: 0 }],
       })
     );
     expect(preview.filesMoved).toBe(2);

@@ -51,7 +51,6 @@ function addJob(
     scheduleIntervalMinutes: null,
     scheduleDailyTime: null,
     filters: [],
-    filterMatchMode: 'all',
     nextMappingId: null,
     actionType: 'move',
     keepNewest: null,

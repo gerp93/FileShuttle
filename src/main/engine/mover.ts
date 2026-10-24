@@ -319,7 +319,7 @@ function matchesMapping(
   outcomes: FileOutcome[]
 ): boolean {
   try {
-    return evaluateFilters(filePath, stat, mapping.filters, mapping.filterMatchMode);
+    return evaluateFilters(filePath, stat, mapping.filters);
   } catch (err) {
     outcomes.push({ sourcePath: filePath, destPath: null, outcome: 'error', reason: errorText(err), sizeBytes: stat.size });
     return false;

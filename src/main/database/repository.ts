@@ -18,6 +18,7 @@ import {
   UpdateMappingInput,
   validateUnzipLimits,
 } from '../../shared/types';
+import { normalizeFilterGroups } from '../../shared/filterGroups';
 import { normalizeDailyTimes } from '../../shared/schedule';
 import { lastInsertId, queryAll, queryOne, run, toBool, toInt } from './dbHelpers';
 
@@ -26,13 +27,14 @@ function rowToFilterRule(row: Record<string, unknown>): FilterRule {
     field: String(row.field) as FilterRule['field'],
     operator: String(row.operator) as FilterRule['operator'],
     value: String(row.value),
+    group: Number(row.group_index),
   };
 }
 
 function loadFilters(db: Database, mappingId: number): FilterRule[] {
   return queryAll(
     db,
-    'SELECT field, operator, value FROM filter_rules WHERE mapping_id = ? ORDER BY sort_order',
+    'SELECT field, operator, value, group_index FROM filter_rules WHERE mapping_id = ? ORDER BY sort_order',
     [mappingId]
   ).map(rowToFilterRule);
 }
@@ -47,7 +49,6 @@ function rowToRecord(db: Database, row: Record<string, unknown>): MappingRecord 
     recursive: toBool(row.recursive),
     actionType: String(row.action_type) as MappingRecord['actionType'],
     conflictPolicy: String(row.conflict_policy) as MappingRecord['conflictPolicy'],
-    filterMatchMode: String(row.filter_match_mode) as MappingRecord['filterMatchMode'],
     enabled: toBool(row.enabled),
     scheduleType: String(row.schedule_type) as MappingRecord['scheduleType'],
     scheduleIntervalMinutes: toInt(row.schedule_interval_minutes),
@@ -62,14 +63,12 @@ function rowToRecord(db: Database, row: Record<string, unknown>): MappingRecord 
 
 function replaceFilterRules(db: Database, mappingId: number, filters: FilterRule[]): void {
   run(db, 'DELETE FROM filter_rules WHERE mapping_id = ?', [mappingId]);
-  filters.forEach((filter, index) => {
-    run(db, 'INSERT INTO filter_rules (mapping_id, field, operator, value, sort_order) VALUES (?, ?, ?, ?, ?)', [
-      mappingId,
-      filter.field,
-      filter.operator,
-      filter.value,
-      index,
-    ]);
+  normalizeFilterGroups(filters).forEach((filter, index) => {
+    run(
+      db,
+      'INSERT INTO filter_rules (mapping_id, field, operator, value, group_index, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [mappingId, filter.field, filter.operator, filter.value, filter.group, index]
+    );
   });
 }
 
@@ -81,7 +80,6 @@ export function toMappingConfig(record: MappingRecord): MappingConfig {
     destPath: record.destPath,
     recursive: record.recursive,
     conflictPolicy: record.conflictPolicy,
-    filterMatchMode: record.filterMatchMode,
     filters: record.filters,
     actionType: record.actionType,
     keepNewest: record.keepNewest,
@@ -92,9 +90,9 @@ export function createMapping(db: Database, input: CreateMappingInput): number {
   run(
     db,
     `INSERT INTO mappings
-      (name, source_path, dest_path, recursive, action_type, conflict_policy, filter_match_mode,
+      (name, source_path, dest_path, recursive, action_type, conflict_policy,
        keep_newest, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time, next_mapping_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.sourcePath,
@@ -102,7 +100,6 @@ export function createMapping(db: Database, input: CreateMappingInput): number {
       input.recursive ? 1 : 0,
       input.actionType,
       input.conflictPolicy,
-      input.filterMatchMode,
       input.keepNewest,
       input.enabled ? 1 : 0,
       input.scheduleType,
@@ -121,7 +118,7 @@ export function updateMapping(db: Database, mappingId: number, input: UpdateMapp
     db,
     `UPDATE mappings SET
       name = ?, source_path = ?, dest_path = ?, recursive = ?, action_type = ?,
-      conflict_policy = ?, filter_match_mode = ?, keep_newest = ?, enabled = ?, schedule_type = ?,
+      conflict_policy = ?, keep_newest = ?, enabled = ?, schedule_type = ?,
       schedule_interval_minutes = ?, schedule_daily_time = ?, next_mapping_id = ?,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = ?`,
@@ -132,7 +129,6 @@ export function updateMapping(db: Database, mappingId: number, input: UpdateMapp
       input.recursive ? 1 : 0,
       input.actionType,
       input.conflictPolicy,
-      input.filterMatchMode,
       input.keepNewest,
       input.enabled ? 1 : 0,
       input.scheduleType,
@@ -161,7 +157,6 @@ export function cloneMapping(db: Database, mappingId: number, newName: string): 
     scheduleIntervalMinutes: source.scheduleIntervalMinutes,
     scheduleDailyTime: source.scheduleDailyTime,
     filters: source.filters,
-    filterMatchMode: source.filterMatchMode,
     nextMappingId: source.nextMappingId,
     actionType: source.actionType,
     keepNewest: source.keepNewest,
