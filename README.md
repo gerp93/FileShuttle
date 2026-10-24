@@ -34,7 +34,8 @@ come from there rather than being reinvented locally.
   "Copy as path" works) and it is checked as you go; Browse opens at the folder
   already entered.
 - **Keep newest N** — leave the newest N matching files in place and act on the
-  rest (handy for pruning a backup folder).
+  rest (handy for pruning a backup folder). Optionally count each file
+  extension separately, e.g. keep the 3 newest `.zip` and the 3 newest `.bak`.
 - **Conflict handling** — overwrite, skip, or auto-rename on a name clash.
 - **Preview** — see exactly which files a mapping or job would touch, with
   total size, files that would be replaced, and per-file detail, without

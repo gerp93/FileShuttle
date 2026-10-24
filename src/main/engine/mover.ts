@@ -272,7 +272,7 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
 
   // Zip handles every matching top-level entry; there is no keep-newest for it.
   const keepNewest = mapping.actionType === 'copy' || isZip ? null : mapping.keepNewest;
-  const { kept, rest } = partitionKeepNewest(candidates, keepNewest);
+  const { kept, rest } = partitionKeepNewest(candidates, keepNewest, mapping.keepNewestPerExtension);
 
   for (const file of kept) {
     outcomes.push({

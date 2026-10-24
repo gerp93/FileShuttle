@@ -46,6 +46,7 @@ function addMapping(name: string, src: string, dest: string, actionType: 'move' 
     nextMappingId: null,
     actionType,
     keepNewest: null,
+    keepNewestPerExtension: false,
   });
 }
 

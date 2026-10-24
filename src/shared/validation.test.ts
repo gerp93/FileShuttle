@@ -87,6 +87,7 @@ describe('validateMappingInput', () => {
     nextMappingId: null,
     actionType: 'move',
     keepNewest: null,
+    keepNewestPerExtension: false,
   };
 
   it('accepts a valid mapping', () => {

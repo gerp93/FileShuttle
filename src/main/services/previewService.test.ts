@@ -89,6 +89,7 @@ describe('previewMapping', () => {
       nextMappingId: null,
       actionType: 'copy',
       keepNewest: 3,
+      keepNewestPerExtension: false,
     });
     expect(config).toMatchObject({ id: 0, name: 'draft', actionType: 'copy', keepNewest: 3 });
   });
@@ -110,6 +111,7 @@ describe('previewJob', () => {
       nextMappingId: null,
       actionType: 'move',
       keepNewest: null,
+      keepNewestPerExtension: false,
     });
 
   it('previews each enabled step, skips disabled ones, and records no history', async () => {

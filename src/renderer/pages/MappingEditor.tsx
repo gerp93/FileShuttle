@@ -39,6 +39,7 @@ export default function MappingEditor() {
   const [filters, setFilters] = useState<FilterRule[]>([]);
   const [keepNewestEnabled, setKeepNewestEnabled] = useState(false);
   const [keepNewestCount, setKeepNewestCount] = useState('3');
+  const [keepNewestPerExtension, setKeepNewestPerExtension] = useState(false);
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blockedJobs, setBlockedJobs] = useState<string[] | null>(null);
@@ -59,6 +60,7 @@ export default function MappingEditor() {
         setFilters(record.filters);
         setKeepNewestEnabled(record.keepNewest != null);
         setKeepNewestCount(String(record.keepNewest ?? 3));
+        setKeepNewestPerExtension(record.keepNewestPerExtension);
       });
     }
   }, [mappingId]);
@@ -118,6 +120,7 @@ export default function MappingEditor() {
       nextMappingId: null,
       actionType,
       keepNewest,
+      keepNewestPerExtension: keepNewest != null && keepNewestPerExtension,
     };
   };
 
@@ -309,6 +312,17 @@ export default function MappingEditor() {
                 onChange={(e) => setKeepNewestCount(e.target.value)}
               />
             </label>
+          )}
+          {keepNewestEnabled && (
+            <div className="switch-row" style={{ marginTop: 8 }}>
+              <input
+                type="checkbox"
+                id="keep-newest-per-extension"
+                checked={keepNewestPerExtension}
+                onChange={(e) => setKeepNewestPerExtension(e.target.checked)}
+              />
+              <label htmlFor="keep-newest-per-extension">Count each file extension separately</label>
+            </div>
           )}
           <p className="muted" style={{ margin: '8px 0 0' }}>
             After filters match, files are ranked by last modified time. The newest N stay;

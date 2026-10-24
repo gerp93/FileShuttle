@@ -42,6 +42,7 @@ function addMapping(name: string, src: string, dest: string, extra: Partial<Para
     nextMappingId: null,
     actionType: 'move',
     keepNewest: null,
+    keepNewestPerExtension: false,
     ...extra,
   });
 }

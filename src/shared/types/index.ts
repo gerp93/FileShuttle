@@ -42,6 +42,8 @@ export interface MappingConfig {
   filters: FilterRule[];
   actionType: ActionType;
   keepNewest: number | null;
+  /** Apply `keepNewest` separately to each file extension instead of to all matches together. */
+  keepNewestPerExtension: boolean;
 }
 
 export interface FileOutcome {
@@ -84,6 +86,7 @@ export interface MappingRecord {
   filters: FilterRule[];
   nextMappingId: number | null;
   keepNewest: number | null;
+  keepNewestPerExtension: boolean;
 }
 
 export const LOG_RETENTION_PRESETS = [
@@ -199,6 +202,7 @@ export interface CreateMappingInput {
   nextMappingId: number | null;
   actionType: ActionType;
   keepNewest: number | null;
+  keepNewestPerExtension: boolean;
 }
 
 export type UpdateMappingInput = CreateMappingInput;

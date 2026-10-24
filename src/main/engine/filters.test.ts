@@ -167,3 +167,40 @@ describe('partitionKeepNewest', () => {
     expect(partitionKeepNewest(tied, 1).kept[0].filePath).toBe('/a');
   });
 });
+
+describe('partitionKeepNewest per extension', () => {
+  const files = [
+    { filePath: '/a.zip', mtimeMs: 1 * DAY },
+    { filePath: '/b.zip', mtimeMs: 4 * DAY },
+    { filePath: '/c.zip', mtimeMs: 2 * DAY },
+    { filePath: '/d.bak', mtimeMs: 3 * DAY },
+    { filePath: '/e.BAK', mtimeMs: 0.5 * DAY },
+    { filePath: '/README', mtimeMs: 5 * DAY },
+  ];
+  const names = (list: Array<{ filePath: string }>) => list.map((f) => f.filePath);
+
+  it('keeps N of each extension instead of N overall', () => {
+    const { kept, rest } = partitionKeepNewest(files, 1, true);
+    expect(names(kept).sort()).toEqual(['/README', '/b.zip', '/d.bak']);
+    expect(names(rest).sort()).toEqual(['/a.zip', '/c.zip', '/e.BAK']);
+  });
+
+  it('keeps the same files as before when the option is off', () => {
+    const { kept } = partitionKeepNewest(files, 2, false);
+    expect(names(kept)).toEqual(['/README', '/b.zip']);
+  });
+
+  it('treats extensions case-insensitively and files without one as a group', () => {
+    const { kept } = partitionKeepNewest(
+      [
+        { filePath: '/x.Bak', mtimeMs: 2 * DAY },
+        { filePath: '/y.bak', mtimeMs: 1 * DAY },
+        { filePath: '/noext1', mtimeMs: 2 * DAY },
+        { filePath: '/noext2', mtimeMs: 1 * DAY },
+      ],
+      1,
+      true
+    );
+    expect(names(kept).sort()).toEqual(['/noext1', '/x.Bak']);
+  });
+});
