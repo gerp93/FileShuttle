@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { isJobOverdue, mostRecentDailyOccurrence, parseDailyTime, ScheduledJobState, validateJobInput } from './schedule';
+import {
+  isJobOverdue,
+  MAX_DAILY_TIMES,
+  mostRecentDailyOccurrence,
+  normalizeDailyTimes,
+  parseDailyTime,
+  ScheduledJobState,
+  validateJobInput,
+} from './schedule';
 import type { CreateJobInput } from './types';
 import { isJobOutputPath, watchTargets, WatchStep } from './watchTargets';
 
@@ -37,7 +45,7 @@ describe('isJobOverdue', () => {
   const base: ScheduledJobState = {
     scheduleType: 'interval',
     scheduleIntervalMinutes: 60,
-    scheduleDailyTime: null,
+    scheduleDailyTimes: [],
     lastRunAt: null,
     createdAt: iso(local(2026, 3, 10, 8, 0)),
   };
@@ -59,7 +67,7 @@ describe('isJobOverdue', () => {
       ...base,
       scheduleType: 'daily_at',
       scheduleIntervalMinutes: null,
-      scheduleDailyTime: '09:00',
+      scheduleDailyTimes: ['09:00'],
       lastRunAt: iso(local(2026, 3, 9, 9, 0)), // ran yesterday at 09:00
     };
     expect(isJobOverdue(job, local(2026, 3, 10, 8, 59))).toBe(false); // today's run not due yet
@@ -72,10 +80,23 @@ describe('isJobOverdue', () => {
       ...base,
       scheduleType: 'daily_at',
       scheduleIntervalMinutes: null,
-      scheduleDailyTime: '09:00',
+      scheduleDailyTimes: ['09:00'],
       lastRunAt: iso(local(2026, 3, 10, 9, 0)),
     };
     expect(isJobOverdue(job, local(2026, 3, 10, 17, 0))).toBe(false);
+  });
+
+  it('daily with several times: overdue when any set time has passed since the last run', () => {
+    const job: ScheduledJobState = {
+      ...base,
+      scheduleType: 'daily_at',
+      scheduleIntervalMinutes: null,
+      scheduleDailyTimes: ['09:00', '17:00'],
+      lastRunAt: iso(local(2026, 3, 10, 9, 0)), // ran this morning
+    };
+    expect(isJobOverdue(job, local(2026, 3, 10, 16, 59))).toBe(false); // evening run not due yet
+    expect(isJobOverdue(job, local(2026, 3, 10, 17, 1))).toBe(true); // missed the evening run
+    expect(isJobOverdue({ ...job, lastRunAt: iso(local(2026, 3, 10, 17, 0)) }, local(2026, 3, 10, 23, 0))).toBe(false);
   });
 
   it('manual and watch jobs are never overdue', () => {
@@ -87,7 +108,7 @@ describe('isJobOverdue', () => {
   it('ignores an unusable schedule or timestamp', () => {
     expect(isJobOverdue({ ...base, scheduleIntervalMinutes: 0 }, local(2030, 1, 1))).toBe(false);
     expect(isJobOverdue({ ...base, createdAt: 'garbage' }, local(2030, 1, 1))).toBe(false);
-    expect(isJobOverdue({ ...base, scheduleType: 'daily_at', scheduleDailyTime: null }, local(2030, 1, 1))).toBe(false);
+    expect(isJobOverdue({ ...base, scheduleType: 'daily_at', scheduleDailyTimes: [] }, local(2030, 1, 1))).toBe(false);
   });
 });
 
@@ -97,14 +118,14 @@ describe('validateJobInput', () => {
     enabled: true,
     scheduleType: 'manual',
     scheduleIntervalMinutes: null,
-    scheduleDailyTime: null,
+    scheduleDailyTimes: [],
     mappingIds: [1],
   };
 
   it('accepts valid jobs', () => {
     expect(validateJobInput(ok)).toBeNull();
     expect(validateJobInput({ ...ok, scheduleType: 'interval', scheduleIntervalMinutes: 15 })).toBeNull();
-    expect(validateJobInput({ ...ok, scheduleType: 'daily_at', scheduleDailyTime: '07:30' })).toBeNull();
+    expect(validateJobInput({ ...ok, scheduleType: 'daily_at', scheduleDailyTimes: ['07:30', '18:00'] })).toBeNull();
   });
 
   it('requires a name and at least one mapping', () => {
@@ -118,8 +139,20 @@ describe('validateJobInput', () => {
     }
   });
 
-  it('rejects a malformed daily time', () => {
-    expect(validateJobInput({ ...ok, scheduleType: 'daily_at', scheduleDailyTime: '9am' })).toMatch(/HH:MM/);
+  it('rejects a malformed daily time, even among valid ones', () => {
+    expect(validateJobInput({ ...ok, scheduleType: 'daily_at', scheduleDailyTimes: ['9am'] })).toMatch(/HH:MM/);
+    expect(validateJobInput({ ...ok, scheduleType: 'daily_at', scheduleDailyTimes: ['09:00', '25:00'] })).toMatch(/HH:MM/);
+  });
+
+  it('requires at least one daily time and caps how many', () => {
+    expect(validateJobInput({ ...ok, scheduleType: 'daily_at', scheduleDailyTimes: [] })).toMatch(/at least one time/);
+    expect(validateJobInput({ ...ok, scheduleType: 'daily_at', scheduleDailyTimes: ['', '  '] })).toMatch(/at least one time/);
+    const tooMany = Array.from({ length: MAX_DAILY_TIMES + 1 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
+    expect(validateJobInput({ ...ok, scheduleType: 'daily_at', scheduleDailyTimes: tooMany })).toMatch(/at most/);
+  });
+
+  it('treats repeated times as one', () => {
+    expect(validateJobInput({ ...ok, scheduleType: 'daily_at', scheduleDailyTimes: ['09:00', ' 09:00'] })).toBeNull();
   });
 });
 
@@ -178,5 +211,11 @@ describe('isJobOutputPath', () => {
   it('treats everything else as input', () => {
     expect(isJobOutputPath('C:\\in\\a.txt', steps)).toBe(false);
     expect(isJobOutputPath('C:\\in\\donut\\a.txt', steps)).toBe(false);
+  });
+});
+
+describe('normalizeDailyTimes', () => {
+  it('trims, drops blanks and duplicates, and sorts', () => {
+    expect(normalizeDailyTimes([' 17:00', '09:00', '', '17:00'])).toEqual(['09:00', '17:00']);
   });
 });

@@ -7,7 +7,7 @@ import PreviewDialog from './PreviewDialog';
 function scheduleSummary(record: JobRecord): string {
   const catchUp = record.catchUp ? ' · catches up' : '';
   if (record.scheduleType === 'interval') return `Every ${record.scheduleIntervalMinutes} min${catchUp}`;
-  if (record.scheduleType === 'daily_at') return `Daily at ${record.scheduleDailyTime}${catchUp}`;
+  if (record.scheduleType === 'daily_at') return `Daily at ${record.scheduleDailyTimes.join(', ')}${catchUp}`;
   if (record.scheduleType === 'watch') return `Watching for new files${catchUp}`;
   return 'Manual only';
 }

@@ -9,7 +9,7 @@ type ScheduledRunCallback = (jobId: number, result: import('../../shared/types')
 
 interface ScheduledJob {
   intervalId?: NodeJS.Timeout;
-  cronTask?: cron.ScheduledTask;
+  cronTasks?: cron.ScheduledTask[];
 }
 
 export class SchedulerService {
@@ -30,7 +30,7 @@ export class SchedulerService {
   shutdown(): void {
     for (const job of this.jobs.values()) {
       if (job.intervalId) clearInterval(job.intervalId);
-      if (job.cronTask) job.cronTask.stop();
+      job.cronTasks?.forEach((task) => task.stop());
     }
     this.jobs.clear();
   }
@@ -70,10 +70,13 @@ export class SchedulerService {
     }
 
     if (record.scheduleType === 'daily_at') {
-      if (!record.scheduleDailyTime) return null;
-      const [hour, minute] = record.scheduleDailyTime.split(':').map((v) => parseInt(v, 10));
-      const cronTask = cron.schedule(`${minute} ${hour} * * *`, () => this.runScheduled(record.id));
-      return { cronTask };
+      const cronTasks = record.scheduleDailyTimes.flatMap((time) => {
+        const [hour, minute] = time.split(':').map((v) => parseInt(v, 10));
+        return Number.isNaN(hour) || Number.isNaN(minute)
+          ? []
+          : [cron.schedule(`${minute} ${hour} * * *`, () => this.runScheduled(record.id))];
+      });
+      return cronTasks.length ? { cronTasks } : null;
     }
 
     return null;

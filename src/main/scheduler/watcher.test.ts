@@ -57,7 +57,7 @@ const addWatchJob = (name: string, mappingIds: number[], catchUp = false) =>
     catchUp,
     scheduleType: 'watch',
     scheduleIntervalMinutes: null,
-    scheduleDailyTime: null,
+    scheduleDailyTimes: [],
     mappingIds,
   });
 

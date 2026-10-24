@@ -53,7 +53,7 @@ function addJob(name: string, mappingIds: number[]) {
     enabled: true,
     scheduleType: 'manual',
     scheduleIntervalMinutes: null,
-    scheduleDailyTime: null,
+    scheduleDailyTimes: [],
     mappingIds,
   });
 }

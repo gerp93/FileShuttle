@@ -391,6 +391,13 @@ function initSchema(db: Database): void {
     addColumnIfMissing(db, 'jobs', 'catch_up', 'catch_up INTEGER NOT NULL DEFAULT 0');
     addColumnIfMissing(db, 'jobs', 'last_run_at', 'last_run_at TEXT');
   });
+  step('add job daily times column', () => {
+    addColumnIfMissing(db, 'jobs', 'schedule_daily_times', 'schedule_daily_times TEXT');
+    db.run(
+      `UPDATE jobs SET schedule_daily_times = schedule_daily_time
+       WHERE schedule_daily_times IS NULL AND schedule_daily_time IS NOT NULL`
+    );
+  });
 }
 
 export async function initDatabase(dbPath?: string): Promise<Database> {

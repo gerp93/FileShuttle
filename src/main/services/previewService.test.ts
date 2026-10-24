@@ -122,7 +122,7 @@ describe('previewJob', () => {
       enabled: true,
       scheduleType: 'manual',
       scheduleIntervalMinutes: null,
-      scheduleDailyTime: null,
+      scheduleDailyTimes: [],
       mappingIds: [addMapping('first', a, path.join(root, 'b')), addMapping('off', a, path.join(root, 'x'), false)],
     });
 

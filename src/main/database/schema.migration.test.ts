@@ -55,7 +55,7 @@ describe('job catch-up columns', () => {
       enabled: true,
       scheduleType: 'interval',
       scheduleIntervalMinutes: 15,
-      scheduleDailyTime: null,
+      scheduleDailyTimes: [],
       mappingIds: [mappingId],
     });
     db.run('ALTER TABLE jobs DROP COLUMN catch_up');
@@ -82,7 +82,7 @@ describe('job catch-up persistence', () => {
       catchUp: true,
       scheduleType: 'daily_at',
       scheduleIntervalMinutes: null,
-      scheduleDailyTime: '09:00',
+      scheduleDailyTimes: ['09:00'],
       mappingIds: [],
     });
     expect(repo.getJob(db, jobId)).toMatchObject({ catchUp: true, lastRunAt: null });
@@ -96,7 +96,7 @@ describe('job catch-up persistence', () => {
       catchUp: false,
       scheduleType: 'daily_at',
       scheduleIntervalMinutes: null,
-      scheduleDailyTime: '09:00',
+      scheduleDailyTimes: ['09:00'],
       mappingIds: [],
     });
     const updated = repo.getJob(db, jobId)!;
@@ -112,10 +112,47 @@ describe('job catch-up persistence', () => {
       enabled: true,
       scheduleType: 'manual',
       scheduleIntervalMinutes: null,
-      scheduleDailyTime: null,
+      scheduleDailyTimes: [],
       mappingIds: [],
     });
     expect(repo.getJob(db, jobId)?.catchUp).toBe(false);
     run(db, 'SELECT 1');
+  });
+});
+
+describe('job daily times', () => {
+  it('stores several times sorted and de-duplicated', async () => {
+    db = await initDatabase(dbPath);
+    const input = {
+      name: 'j',
+      enabled: true,
+      scheduleType: 'daily_at' as const,
+      scheduleIntervalMinutes: null,
+      scheduleDailyTimes: ['17:00', '09:00', '09:00'],
+      mappingIds: [],
+    };
+    const jobId = repo.createJob(db, input);
+    expect(repo.getJob(db, jobId)?.scheduleDailyTimes).toEqual(['09:00', '17:00']);
+
+    repo.updateJob(db, jobId, { ...input, scheduleDailyTimes: ['12:30'] });
+    expect(repo.getJob(db, jobId)?.scheduleDailyTimes).toEqual(['12:30']);
+  });
+
+  it('carries a single time from before multiple times existed', async () => {
+    db = await initDatabase(dbPath);
+    const jobId = repo.createJob(db, {
+      name: 'old',
+      enabled: true,
+      scheduleType: 'daily_at',
+      scheduleIntervalMinutes: null,
+      scheduleDailyTimes: ['08:15'],
+      mappingIds: [],
+    });
+    db.run('ALTER TABLE jobs DROP COLUMN schedule_daily_times');
+    saveDatabase(db);
+    db.close();
+
+    db = await initDatabase(dbPath);
+    expect(repo.getJob(db, jobId)?.scheduleDailyTimes).toEqual(['08:15']);
   });
 });
