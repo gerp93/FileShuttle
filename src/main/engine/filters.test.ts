@@ -9,10 +9,16 @@ const stat = (overrides: Partial<{ size: number; mtimeMs: number; birthtimeMs: n
   birthtimeMs: Date.parse('2024-06-01T12:00:00Z'),
   ...overrides,
 });
-const rule = (field: FilterRule['field'], operator: FilterRule['operator'], value: string): FilterRule => ({
+const rule = (
+  field: FilterRule['field'],
+  operator: FilterRule['operator'],
+  value: string,
+  group = 0
+): FilterRule => ({
   field,
   operator,
   value,
+  group,
 });
 
 describe('extension filter', () => {
@@ -89,26 +95,43 @@ describe('date filters', () => {
 });
 
 describe('evaluateFilters', () => {
-  const ext = rule('extension', 'equals', 'txt');
-  const big = rule('size', 'min', '1000');
+  const txt = rule('extension', 'equals', 'txt');
+  const log = rule('extension', 'equals', 'log', 0);
+  const big = rule('size', 'min', '1000', 1);
 
   it('matches everything when there are no filters', () => {
-    expect(evaluateFilters('/f.bin', stat(), [], 'all')).toBe(true);
-    expect(evaluateFilters('/f.bin', stat(), [], 'any')).toBe(true);
+    expect(evaluateFilters('/f.bin', stat(), [])).toBe(true);
   });
 
-  it('ALL requires every rule to match', () => {
-    expect(evaluateFilters('/f.txt', stat({ size: 5000 }), [ext, big], 'all')).toBe(true);
-    expect(evaluateFilters('/f.txt', stat({ size: 5 }), [ext, big], 'all')).toBe(false);
+  it('requires every group to be satisfied', () => {
+    const rules = [txt, big];
+    expect(evaluateFilters('/f.txt', stat({ size: 5000 }), rules)).toBe(true);
+    expect(evaluateFilters('/f.txt', stat({ size: 5 }), rules)).toBe(false);
   });
 
-  it('ANY requires at least one rule to match', () => {
-    expect(evaluateFilters('/f.txt', stat({ size: 5 }), [ext, big], 'any')).toBe(true);
-    expect(evaluateFilters('/f.bin', stat({ size: 5 }), [ext, big], 'any')).toBe(false);
+  it('treats rules with their own group each as a required condition', () => {
+    const rules = [rule('extension', 'equals', 'txt', 0), rule('size', 'min', '1000', 1)];
+    expect(evaluateFilters('/f.bin', stat({ size: 5000 }), rules)).toBe(false);
   });
 
-  it('defaults to ALL', () => {
-    expect(evaluateFilters('/f.txt', stat({ size: 5 }), [ext, big])).toBe(false);
+  it('needs only one rule of a group to match', () => {
+    const rules = [txt, log];
+    expect(evaluateFilters('/f.txt', stat(), rules)).toBe(true);
+    expect(evaluateFilters('/f.log', stat(), rules)).toBe(true);
+    expect(evaluateFilters('/f.bin', stat(), rules)).toBe(false);
+  });
+
+  it('combines OR groups with AND: (txt OR log) AND big', () => {
+    const rules = [txt, log, big];
+    expect(evaluateFilters('/f.log', stat({ size: 5000 }), rules)).toBe(true);
+    expect(evaluateFilters('/f.log', stat({ size: 5 }), rules)).toBe(false);
+    expect(evaluateFilters('/f.bin', stat({ size: 5000 }), rules)).toBe(false);
+  });
+
+  it('follows groups by number, not by position in the list', () => {
+    const rules = [txt, big, log];
+    expect(evaluateFilters('/f.log', stat({ size: 5000 }), rules)).toBe(true);
+    expect(evaluateFilters('/f.log', stat({ size: 5 }), rules)).toBe(false);
   });
 });
 

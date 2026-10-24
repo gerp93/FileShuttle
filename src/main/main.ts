@@ -28,6 +28,7 @@ import {
 import { inputToConfig, previewJob, previewMapping } from './services/previewService';
 import { validateJobInput } from '../shared/schedule';
 import { validateMappingInput } from '../shared/validation';
+import { checkFolder, nearestExistingFolder } from './folderCheck';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
 import { SchedulerService } from './scheduler/scheduler';
@@ -35,6 +36,7 @@ import { WatcherService } from './scheduler/watcher';
 import {
   CreateJobInput,
   CreateMappingInput,
+  FolderRole,
   HistoryListFilter,
   LogRetentionId,
   RunAllSummary,
@@ -573,15 +575,20 @@ function registerIPCHandlers(): void {
     return applyRetention(db!, 'expired');
   });
 
-  ipcMain.handle('dialogs:pickFolder', async (_, title: string) => {
+  ipcMain.handle('dialogs:pickFolder', async (_, title: string, startAt?: string) => {
     if (!mainWindow) return null;
     mainWindow.focus();
+    // Open where the field already points (or the closest folder that exists), not at the default location.
+    const defaultPath = startAt?.trim() ? (await nearestExistingFolder(startAt)) ?? undefined : undefined;
     const result = await dialog.showOpenDialog(mainWindow, {
       title,
+      defaultPath,
       properties: ['openDirectory'],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
+
+  ipcMain.handle('dialogs:checkFolder', (_, folder: string, role: FolderRole) => checkFolder(folder, role));
 
   ipcMain.handle('shell:openPath', (_, filePath: string) => shell.openPath(filePath));
 

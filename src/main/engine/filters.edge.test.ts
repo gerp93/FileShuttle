@@ -3,10 +3,16 @@ import { FilterRule } from '../../shared/types';
 import { matchesFilter } from './filters';
 
 const stat = () => ({ size: 100, mtimeMs: Date.parse('2024-06-15T12:00:00Z'), birthtimeMs: Date.parse('2024-06-01T12:00:00Z') });
-const rule = (field: FilterRule['field'], operator: FilterRule['operator'], value: string): FilterRule => ({
+const rule = (
+  field: FilterRule['field'],
+  operator: FilterRule['operator'],
+  value: string,
+  group = 0
+): FilterRule => ({
   field,
   operator,
   value,
+  group,
 });
 
 describe('extension edge cases', () => {

@@ -45,7 +45,6 @@ export function inputToConfig(input: CreateMappingInput, id = 0): MappingConfig 
     destPath: input.destPath,
     recursive: input.recursive,
     conflictPolicy: input.conflictPolicy,
-    filterMatchMode: input.filterMatchMode,
     filters: input.filters,
     actionType: input.actionType,
     keepNewest: input.keepNewest,

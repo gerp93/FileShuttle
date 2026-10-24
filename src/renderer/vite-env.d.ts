@@ -5,6 +5,8 @@ import type {
   CreateMappingInput,
   DbLocationInfo,
   FileOutcome,
+  FolderCheck,
+  FolderRole,
   HistoryListFilter,
   JobPreview,
   JobRecord,
@@ -73,7 +75,8 @@ interface FileShuttleAPI {
     setUnzipLimits: (limits: UnzipLimitsSetting) => Promise<void>;
   };
   dialogs: {
-    pickFolder: (title: string) => Promise<string | null>;
+    pickFolder: (title: string, startAt?: string) => Promise<string | null>;
+    checkFolder: (folder: string, role: FolderRole) => Promise<FolderCheck>;
   };
   shell: {
     openPath: (filePath: string) => Promise<string>;

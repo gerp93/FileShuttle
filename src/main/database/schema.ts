@@ -39,7 +39,8 @@ const STATEMENTS = [
                  ('extension','filename_glob','filename_regex','size','modified_date','created_date')),
     operator     TEXT NOT NULL CHECK (operator IN ('equals','matches','min','max','before','after')),
     value        TEXT NOT NULL,
-    sort_order   INTEGER NOT NULL DEFAULT 0
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    group_index  INTEGER NOT NULL DEFAULT 0
   )`,
   `CREATE TABLE IF NOT EXISTS run_history (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,13 +93,14 @@ const STATEMENTS = [
   )`,
 ];
 
-function addColumnIfMissing(db: Database, table: string, column: string, ddl: string): void {
+/** Adds the column when it is absent; returns true only when this call added it. */
+function addColumnIfMissing(db: Database, table: string, column: string, ddl: string): boolean {
   const rows = db.exec(`PRAGMA table_info(${table})`);
-  if (!rows.length) return;
+  if (!rows.length) return false;
   const existing = new Set(rows[0].values.map((row) => String(row[1])));
-  if (!existing.has(column)) {
-    db.run(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
-  }
+  if (existing.has(column)) return false;
+  db.run(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  return true;
 }
 
 function rewriteRunHistoryFilesTable(db: Database, alreadyHasToken: string, outcomeCheck: string): void {
@@ -390,6 +392,18 @@ function initSchema(db: Database): void {
   step('add job catch-up columns', () => {
     addColumnIfMissing(db, 'jobs', 'catch_up', 'catch_up INTEGER NOT NULL DEFAULT 0');
     addColumnIfMissing(db, 'jobs', 'last_run_at', 'last_run_at TEXT');
+  });
+  step('add filter group column', () => {
+    const added = addColumnIfMissing(db, 'filter_rules', 'group_index', 'group_index INTEGER NOT NULL DEFAULT 0');
+    if (!added) return;
+    // Before groups, one per-mapping switch decided AND vs OR for the whole list. Keep what each
+    // mapping did: "any" puts every rule in one group, "all" gives every rule a group of its own.
+    db.run(
+      `UPDATE filter_rules SET group_index = CASE
+         WHEN (SELECT filter_match_mode FROM mappings m WHERE m.id = filter_rules.mapping_id) = 'any' THEN 0
+         ELSE sort_order
+       END`
+    );
   });
   step('add job daily times column', () => {
     addColumnIfMissing(db, 'jobs', 'schedule_daily_times', 'schedule_daily_times TEXT');

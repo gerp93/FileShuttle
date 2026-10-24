@@ -37,7 +37,7 @@ describe('move', () => {
       makeMapping({
         sourcePath: src,
         destPath: dest,
-        filters: [{ field: 'extension', operator: 'equals', value: 'txt' }],
+        filters: [{ field: 'extension', operator: 'equals', value: 'txt', group: 0 }],
       }),
       { trash }
     );
@@ -45,6 +45,30 @@ describe('move', () => {
     expect(listTree(src)).toEqual(['b.log']);
     expect(listTree(dest)).toEqual(['a.txt']);
     expect(fs.readFileSync(path.join(dest, 'a.txt'), 'utf8')).toBe('A');
+  });
+
+  it('picks up files that match any rule in a group and every group', async () => {
+    writeFile(path.join(src, 'a.txt'), 'A');
+    writeFile(path.join(src, 'b.log'), 'B');
+    writeFile(path.join(src, 'c.bin'), 'C');
+    writeFile(path.join(src, 'report-d.txt'), 'D');
+    const result = await runMapping(
+      makeMapping({
+        sourcePath: src,
+        destPath: dest,
+        // (txt OR log) AND name starts with "report"-or-"a"
+        filters: [
+          { field: 'extension', operator: 'equals', value: 'txt', group: 0 },
+          { field: 'extension', operator: 'equals', value: 'log', group: 0 },
+          { field: 'filename_glob', operator: 'matches', value: 'report*', group: 1 },
+          { field: 'filename_glob', operator: 'matches', value: 'a*', group: 1 },
+        ],
+      }),
+      { trash }
+    );
+    expect(result.filesMoved).toBe(2);
+    expect(listTree(dest)).toEqual(['a.txt', 'report-d.txt']);
+    expect(listTree(src)).toEqual(['b.log', 'c.bin']);
   });
 
   it('does not descend into subfolders unless recursive', async () => {
@@ -159,7 +183,7 @@ describe('delete', () => {
       makeMapping({
         sourcePath: src,
         actionType: 'delete',
-        filters: [{ field: 'extension', operator: 'equals', value: 'tmp' }],
+        filters: [{ field: 'extension', operator: 'equals', value: 'tmp', group: 0 }],
       }),
       { trash }
     );
@@ -242,7 +266,7 @@ describe('unzip', () => {
         sourcePath: src,
         destPath: dest,
         actionType: 'unzip',
-        filters: [{ field: 'extension', operator: 'equals', value: 'zip' }],
+        filters: [{ field: 'extension', operator: 'equals', value: 'zip', group: 0 }],
       }),
       { trash }
     );

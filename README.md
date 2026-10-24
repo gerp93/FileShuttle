@@ -25,9 +25,14 @@ come from there rather than being reinvented locally.
   Unzip extracts matching `.zip` files into a same-named subfolder of the
   destination, then sends the original zip to the Recycle Bin.
 - **Filters** — 0 to N rules per mapping (extension, wildcard/regex
-  filename, size in bytes, modified/created date), combined as either AND
-  ("match ALL filters") or OR ("match ANY filter"). Filters are validated when
-  you save, so a bad regex or a size like `5MB` is caught immediately.
+  filename, size in bytes, modified/created date). Rules are grouped: a file
+  must satisfy every group (AND), and inside a group any one rule is enough
+  (OR), so `(zip OR bak) AND larger than 1 MB` is one mapping. Filters are
+  validated when you save, so a bad regex or a size like `5MB` is caught
+  immediately.
+- **Folders** — type or paste a source/destination path (Explorer's quoted
+  "Copy as path" works) and it is checked as you go; Browse opens at the folder
+  already entered.
 - **Keep newest N** — leave the newest N matching files in place and act on the
   rest (handy for pruning a backup folder).
 - **Conflict handling** — overwrite, skip, or auto-rename on a name clash.

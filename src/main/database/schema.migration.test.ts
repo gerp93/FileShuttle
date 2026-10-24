@@ -45,7 +45,6 @@ describe('job catch-up columns', () => {
       scheduleIntervalMinutes: null,
       scheduleDailyTime: null,
       filters: [],
-      filterMatchMode: 'all',
       nextMappingId: null,
       actionType: 'move',
       keepNewest: null,
@@ -154,5 +153,44 @@ describe('job daily times', () => {
 
     db = await initDatabase(dbPath);
     expect(repo.getJob(db, jobId)?.scheduleDailyTimes).toEqual(['08:15']);
+  });
+});
+
+describe('filter groups', () => {
+  const baseInput = {
+    sourcePath: 'C:\in',
+    destPath: 'C:\out',
+    recursive: false,
+    conflictPolicy: 'skip' as const,
+    enabled: true,
+    scheduleType: 'manual' as const,
+    scheduleIntervalMinutes: null,
+    scheduleDailyTime: null,
+    nextMappingId: null,
+    actionType: 'move' as const,
+    keepNewest: null,
+  };
+  const ext = (value: string, group: number) => ({ field: 'extension' as const, operator: 'equals' as const, value, group });
+
+  it('round-trip, tidied into consecutive groups', async () => {
+    db = await initDatabase(dbPath);
+    const id = repo.createMapping(db, { ...baseInput, name: 'm', filters: [ext('a', 4), ext('b', 9), ext('c', 4)] });
+    expect(repo.getMapping(db, id)?.filters.map((f) => [f.value, f.group])).toEqual([['a', 0], ['c', 0], ['b', 1]]);
+  });
+
+  it('keep what the old match-ALL / match-ANY switch meant', async () => {
+    db = await initDatabase(dbPath);
+    const all = repo.createMapping(db, { ...baseInput, name: 'all', filters: [ext('a', 0), ext('b', 1), ext('c', 2)] });
+    const any = repo.createMapping(db, { ...baseInput, name: 'any', filters: [ext('a', 0), ext('b', 0), ext('c', 0)] });
+    // Rewind to the previous release's shape: a mode per mapping, no group column.
+    run(db, "UPDATE mappings SET filter_match_mode = 'any' WHERE id = ?", [any]);
+    db.run('ALTER TABLE filter_rules DROP COLUMN group_index');
+    saveDatabase(db);
+    db.close();
+
+    db = await initDatabase(dbPath);
+
+    expect(repo.getMapping(db, all)?.filters.map((f) => f.group)).toEqual([0, 1, 2]);
+    expect(repo.getMapping(db, any)?.filters.map((f) => f.group)).toEqual([0, 0, 0]);
   });
 });

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CreateMappingInput, FilterRule, mappingInUseMessage, StepPreview } from '../../shared/types';
-import { validateMappingPaths } from '../../shared/pathSafety';
+import { normalizeFilterGroups } from '../../shared/filterGroups';
+import { cleanFolderInput, validateMappingPaths } from '../../shared/pathSafety';
 import { validateFilters } from '../../shared/validation';
-import FilterRow from '../components/FilterRow';
+import FilterGroupsEditor from '../components/FilterGroupsEditor';
+import FolderField from '../components/FolderField';
 import PreviewDialog from '../components/PreviewDialog';
 import { errorMessage } from '../utils/errors';
 
@@ -34,7 +36,6 @@ export default function MappingEditor() {
   const [recursive, setRecursive] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [conflictPolicy, setConflictPolicy] = useState<'skip' | 'overwrite' | 'auto_rename'>('skip');
-  const [filterMatchMode, setFilterMatchMode] = useState<'all' | 'any'>('all');
   const [filters, setFilters] = useState<FilterRule[]>([]);
   const [keepNewestEnabled, setKeepNewestEnabled] = useState(false);
   const [keepNewestCount, setKeepNewestCount] = useState('3');
@@ -55,7 +56,6 @@ export default function MappingEditor() {
         setRecursive(record.recursive);
         setEnabled(record.enabled);
         setConflictPolicy(record.conflictPolicy);
-        setFilterMatchMode(record.filterMatchMode);
         setFilters(record.filters);
         setKeepNewestEnabled(record.keepNewest != null);
         setKeepNewestCount(String(record.keepNewest ?? 3));
@@ -65,8 +65,8 @@ export default function MappingEditor() {
 
   const buildInput = (): CreateMappingInput | null => {
     const trimmedName = name.trim();
-    const trimmedSource = sourcePath.trim();
-    const trimmedDest = actionType === 'delete' ? '' : destPath.trim();
+    const trimmedSource = cleanFolderInput(sourcePath);
+    const trimmedDest = actionType === 'delete' ? '' : cleanFolderInput(destPath);
 
     if (!trimmedName || !trimmedSource || (actionType !== 'delete' && !trimmedDest)) {
       setError(
@@ -114,17 +114,32 @@ export default function MappingEditor() {
       scheduleType: 'manual',
       scheduleIntervalMinutes: null,
       scheduleDailyTime: null,
-      filters,
-      filterMatchMode,
+      filters: normalizeFilterGroups(filters),
       nextMappingId: null,
       actionType,
       keepNewest,
     };
   };
 
+  /** Folder problems that could never work (a file, a malformed path). A folder that merely isn't there only warns. */
+  const hardFolderProblem = async (input: CreateMappingInput): Promise<string | null> => {
+    const checks: Array<[string, string, 'source' | 'destination']> = [['Source folder', input.sourcePath, 'source']];
+    if (input.actionType !== 'delete') checks.push(['Destination folder', input.destPath, 'destination']);
+    for (const [label, folder, role] of checks) {
+      const result = await window.fileshuttleAPI.dialogs.checkFolder(folder, role);
+      if (result.status === 'invalid' || result.status === 'not_folder') return `${label}: ${result.message}`;
+    }
+    return null;
+  };
+
   const save = async () => {
     const input = buildInput();
     if (!input) return;
+    const folderProblem = await hardFolderProblem(input);
+    if (folderProblem) {
+      setError(folderProblem);
+      return;
+    }
     try {
       if (isNew) {
         await window.fileshuttleAPI.mappings.create(input);
@@ -142,6 +157,11 @@ export default function MappingEditor() {
   const openPreview = async () => {
     const input = buildInput();
     if (!input) return;
+    const folderProblem = await hardFolderProblem(input);
+    if (folderProblem) {
+      setError(folderProblem);
+      return;
+    }
     setPreviewing(true);
     try {
       setPreview(await window.fileshuttleAPI.mappings.previewInput(input));
@@ -173,16 +193,6 @@ export default function MappingEditor() {
     }
   };
 
-  const browseSource = async () => {
-    const path = await window.fileshuttleAPI.dialogs.pickFolder('Choose source folder');
-    if (path) setSourcePath(path);
-  };
-
-  const browseDest = async () => {
-    const path = await window.fileshuttleAPI.dialogs.pickFolder('Choose destination folder');
-    if (path) setDestPath(path);
-  };
-
   return (
     <div>
       <h1 className="page-title">{isNew ? 'New Mapping' : 'Edit Mapping'}</h1>
@@ -192,13 +202,13 @@ export default function MappingEditor() {
         <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
       </label>
 
-      <div className="field-row" style={{ marginBottom: 12 }}>
-        <label className="field grow">
-          Source folder
-          <input type="text" value={sourcePath} readOnly />
-        </label>
-        <button className="outline" onClick={() => void browseSource()}>Browse</button>
-      </div>
+      <FolderField
+        label="Source folder"
+        value={sourcePath}
+        role="source"
+        browseTitle="Choose source folder"
+        onChange={setSourcePath}
+      />
 
       <label className="field" style={{ marginBottom: 12 }}>
         Action
@@ -234,13 +244,13 @@ export default function MappingEditor() {
       )}
 
       {actionType !== 'delete' && (
-        <div className="field-row" style={{ marginBottom: 12 }}>
-          <label className="field grow">
-            Destination folder
-            <input type="text" value={destPath} readOnly />
-          </label>
-          <button className="outline" onClick={() => void browseDest()}>Browse</button>
-        </div>
+        <FolderField
+          label="Destination folder"
+          value={destPath}
+          role="destination"
+          browseTitle="Choose destination folder"
+          onChange={setDestPath}
+        />
       )}
 
       {actionType !== 'zip' && (
@@ -274,27 +284,9 @@ export default function MappingEditor() {
 
       <div className="page-header">
         <span>Filters (leave empty to move every file)</span>
-        <select value={filterMatchMode} onChange={(e) => setFilterMatchMode(e.target.value as 'all' | 'any')}>
-          <option value="all">Match ALL filters (AND)</option>
-          <option value="any">Match ANY filter (OR)</option>
-        </select>
-        <button className="text" onClick={() => setFilters([...filters, { field: 'extension', operator: 'equals', value: '' }])}>
-          Add Filter
-        </button>
       </div>
 
-      {filters.map((rule, i) => (
-        <FilterRow
-          key={i}
-          rule={rule}
-          onChange={(updated) => {
-            const next = [...filters];
-            next[i] = updated;
-            setFilters(next);
-          }}
-          onRemove={() => setFilters(filters.filter((_, j) => j !== i))}
-        />
-      ))}
+      <FilterGroupsEditor filters={filters} onChange={setFilters} />
 
       {actionType !== 'copy' && actionType !== 'zip' && (
         <div style={{ marginTop: 8, marginBottom: 12 }}>

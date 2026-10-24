@@ -38,7 +38,7 @@ export default function FilterRow({ rule, onChange, onRemove }: Props) {
 
   const setField = (field: string) => {
     const ops = OPERATORS_BY_FIELD[field] ?? [['equals', 'is']];
-    onChange({ field: field as FilterRule['field'], operator: ops[0][0] as FilterRule['operator'], value: '' });
+    onChange({ ...rule, field: field as FilterRule['field'], operator: ops[0][0] as FilterRule['operator'], value: '' });
   };
 
   return (

@@ -40,7 +40,6 @@ export function makeMapping(overrides: Partial<MappingConfig> & Pick<MappingConf
     destPath: '',
     recursive: false,
     conflictPolicy: 'skip',
-    filterMatchMode: 'all',
     filters: [],
     actionType: 'move',
     keepNewest: null,
