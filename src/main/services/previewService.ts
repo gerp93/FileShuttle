@@ -48,6 +48,7 @@ export function inputToConfig(input: CreateMappingInput, id = 0): MappingConfig 
     filters: input.filters,
     actionType: input.actionType,
     keepNewest: input.keepNewest,
+    keepNewestPerExtension: input.keepNewestPerExtension,
   };
 }
 

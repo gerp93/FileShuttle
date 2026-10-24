@@ -6,10 +6,14 @@ export interface RankedFile {
   mtimeMs: number;
 }
 
-/** Leave the newest `keepNewest` files in place (by mtime, then path). */
+/**
+ * Leave the newest `keepNewest` files in place (by mtime, then path). With
+ * `perExtension`, each extension gets its own `keepNewest` instead of all files sharing one.
+ */
 export function partitionKeepNewest<T extends RankedFile>(
   files: T[],
-  keepNewest: number | null
+  keepNewest: number | null,
+  perExtension = false
 ): { kept: T[]; rest: T[] } {
   if (keepNewest == null || keepNewest <= 0) {
     return { kept: [], rest: files };
@@ -18,10 +22,20 @@ export function partitionKeepNewest<T extends RankedFile>(
     if (b.mtimeMs !== a.mtimeMs) return b.mtimeMs - a.mtimeMs;
     return a.filePath.localeCompare(b.filePath);
   });
-  return {
-    kept: sorted.slice(0, keepNewest),
-    rest: sorted.slice(keepNewest),
-  };
+  const kept: T[] = [];
+  const rest: T[] = [];
+  const keptPerBucket = new Map<string, number>();
+  for (const file of sorted) {
+    const bucket = perExtension ? extensionOf(file.filePath) : '';
+    const count = keptPerBucket.get(bucket) ?? 0;
+    if (count < keepNewest) {
+      kept.push(file);
+      keptPerBucket.set(bucket, count + 1);
+    } else {
+      rest.push(file);
+    }
+  }
+  return { kept, rest };
 }
 
 export function evaluateFilters(
@@ -62,14 +76,19 @@ function pathBasename(filePath: string): string {
   return parts[parts.length - 1] ?? filePath;
 }
 
+/**
+ * Same rule as path.extname: the text after the last dot, lower-cased, but a
+ * leading dot alone (.gitignore) or no dot at all (README) means no extension.
+ */
+function extensionOf(filePath: string): string {
+  const name = pathBasename(filePath);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
 function matchExtension(filePath: string, value: string): boolean {
   const wanted = value.trim().toLowerCase().replace(/^\./, '');
-  const name = pathBasename(filePath);
-  // Same rule as path.extname: the text after the last dot, but a leading dot
-  // alone (.gitignore) or no dot at all (README) means there is no extension.
-  const dot = name.lastIndexOf('.');
-  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
-  return ext === wanted;
+  return extensionOf(filePath) === wanted;
 }
 
 function matchGlob(fileName: string, pattern: string): boolean {

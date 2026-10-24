@@ -54,6 +54,7 @@ function addJob(
     nextMappingId: null,
     actionType: 'move',
     keepNewest: null,
+    keepNewestPerExtension: false,
   });
   const jobId = repo.createJob(db, {
     name,

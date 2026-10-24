@@ -47,6 +47,7 @@ function addJobWithFiles(name: string, fileCount: number, steps = 1): number {
         nextMappingId: null,
         actionType: 'move',
         keepNewest: null,
+        keepNewestPerExtension: false,
       })
     );
     from = to;

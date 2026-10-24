@@ -71,6 +71,32 @@ describe('move', () => {
     expect(listTree(src)).toEqual(['b.log', 'c.bin']);
   });
 
+  it('keeps the newest N of each extension when asked', async () => {
+    const touch = (name: string, ageDays: number) => {
+      const file = path.join(src, name);
+      writeFile(file, name);
+      const when = new Date(Date.now() - ageDays * 24 * 60 * 60 * 1000);
+      fs.utimesSync(file, when, when);
+    };
+    touch('new.zip', 1);
+    touch('old.zip', 5);
+    touch('oldest.zip', 9);
+    touch('new.bak', 2);
+    touch('old.bak', 6);
+    const result = await runMapping(
+      makeMapping({
+        sourcePath: src,
+        destPath: dest,
+        actionType: 'delete',
+        keepNewest: 1,
+        keepNewestPerExtension: true,
+      }),
+      { trash }
+    );
+    expect(result.filesDeleted).toBe(3);
+    expect(listTree(src)).toEqual(['new.bak', 'new.zip']);
+  });
+
   it('does not descend into subfolders unless recursive', async () => {
     writeFile(path.join(src, 'top.txt'));
     writeFile(path.join(src, 'sub', 'deep.txt'));

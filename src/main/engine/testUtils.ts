@@ -43,6 +43,7 @@ export function makeMapping(overrides: Partial<MappingConfig> & Pick<MappingConf
     filters: [],
     actionType: 'move',
     keepNewest: null,
+    keepNewestPerExtension: false,
     ...overrides,
   };
 }

@@ -48,6 +48,7 @@ describe('job catch-up columns', () => {
       nextMappingId: null,
       actionType: 'move',
       keepNewest: null,
+      keepNewestPerExtension: false,
     });
     const jobId = repo.createJob(db, {
       name: 'legacy job',
@@ -169,6 +170,7 @@ describe('filter groups', () => {
     nextMappingId: null,
     actionType: 'move' as const,
     keepNewest: null,
+    keepNewestPerExtension: false,
   };
   const ext = (value: string, group: number) => ({ field: 'extension' as const, operator: 'equals' as const, value, group });
 
@@ -192,5 +194,47 @@ describe('filter groups', () => {
 
     expect(repo.getMapping(db, all)?.filters.map((f) => f.group)).toEqual([0, 1, 2]);
     expect(repo.getMapping(db, any)?.filters.map((f) => f.group)).toEqual([0, 0, 0]);
+  });
+});
+
+describe('keep newest per extension', () => {
+  const input = {
+    name: 'm',
+    sourcePath: 'C:\\in',
+    destPath: 'C:\\out',
+    recursive: false,
+    conflictPolicy: 'skip' as const,
+    enabled: true,
+    scheduleType: 'manual' as const,
+    scheduleIntervalMinutes: null,
+    scheduleDailyTime: null,
+    filters: [],
+    nextMappingId: null,
+    actionType: 'delete' as const,
+    keepNewest: 3,
+    keepNewestPerExtension: true,
+  };
+
+  it('round-trips and survives cloning', async () => {
+    db = await initDatabase(dbPath);
+    const id = repo.createMapping(db, input);
+    expect(repo.getMapping(db, id)?.keepNewestPerExtension).toBe(true);
+    const copy = repo.cloneMapping(db, id, 'copy');
+    expect(repo.getMapping(db, copy)?.keepNewestPerExtension).toBe(true);
+    repo.updateMapping(db, id, { ...input, keepNewestPerExtension: false });
+    expect(repo.getMapping(db, id)?.keepNewestPerExtension).toBe(false);
+  });
+
+  it('is added off to a database from before the option existed', async () => {
+    db = await initDatabase(dbPath);
+    const id = repo.createMapping(db, { ...input, keepNewestPerExtension: false });
+    db.run('ALTER TABLE mappings DROP COLUMN keep_newest_per_extension');
+    saveDatabase(db);
+    db.close();
+
+    db = await initDatabase(dbPath);
+
+    expect(columnsOf(db, 'mappings')).toContain('keep_newest_per_extension');
+    expect(repo.getMapping(db, id)).toMatchObject({ keepNewest: 3, keepNewestPerExtension: false });
   });
 });

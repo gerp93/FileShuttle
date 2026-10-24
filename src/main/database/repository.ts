@@ -58,6 +58,7 @@ function rowToRecord(db: Database, row: Record<string, unknown>): MappingRecord 
     filters: loadFilters(db, id),
     nextMappingId: toInt(row.next_mapping_id),
     keepNewest: toInt(row.keep_newest),
+    keepNewestPerExtension: toBool(row.keep_newest_per_extension),
   };
 }
 
@@ -83,6 +84,7 @@ export function toMappingConfig(record: MappingRecord): MappingConfig {
     filters: record.filters,
     actionType: record.actionType,
     keepNewest: record.keepNewest,
+    keepNewestPerExtension: record.keepNewestPerExtension,
   };
 }
 
@@ -91,8 +93,9 @@ export function createMapping(db: Database, input: CreateMappingInput): number {
     db,
     `INSERT INTO mappings
       (name, source_path, dest_path, recursive, action_type, conflict_policy,
-       keep_newest, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time, next_mapping_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       keep_newest, keep_newest_per_extension, enabled, schedule_type, schedule_interval_minutes,
+       schedule_daily_time, next_mapping_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.sourcePath,
@@ -101,6 +104,7 @@ export function createMapping(db: Database, input: CreateMappingInput): number {
       input.actionType,
       input.conflictPolicy,
       input.keepNewest,
+      input.keepNewestPerExtension ? 1 : 0,
       input.enabled ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
@@ -118,7 +122,7 @@ export function updateMapping(db: Database, mappingId: number, input: UpdateMapp
     db,
     `UPDATE mappings SET
       name = ?, source_path = ?, dest_path = ?, recursive = ?, action_type = ?,
-      conflict_policy = ?, keep_newest = ?, enabled = ?, schedule_type = ?,
+      conflict_policy = ?, keep_newest = ?, keep_newest_per_extension = ?, enabled = ?, schedule_type = ?,
       schedule_interval_minutes = ?, schedule_daily_time = ?, next_mapping_id = ?,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = ?`,
@@ -130,6 +134,7 @@ export function updateMapping(db: Database, mappingId: number, input: UpdateMapp
       input.actionType,
       input.conflictPolicy,
       input.keepNewest,
+      input.keepNewestPerExtension ? 1 : 0,
       input.enabled ? 1 : 0,
       input.scheduleType,
       input.scheduleIntervalMinutes,
@@ -160,6 +165,7 @@ export function cloneMapping(db: Database, mappingId: number, newName: string): 
     nextMappingId: source.nextMappingId,
     actionType: source.actionType,
     keepNewest: source.keepNewest,
+    keepNewestPerExtension: source.keepNewestPerExtension,
   });
 }
 

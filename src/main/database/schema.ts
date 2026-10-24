@@ -23,6 +23,7 @@ const STATEMENTS = [
     filter_match_mode           TEXT NOT NULL DEFAULT 'all'
                                  CHECK (filter_match_mode IN ('all','any')),
     keep_newest                 INTEGER,
+    keep_newest_per_extension   INTEGER NOT NULL DEFAULT 0,
     enabled                     INTEGER NOT NULL DEFAULT 1,
     schedule_type               TEXT NOT NULL DEFAULT 'manual'
                                  CHECK (schedule_type IN ('manual','interval','daily_at','watch')),
@@ -403,6 +404,15 @@ function initSchema(db: Database): void {
          WHEN (SELECT filter_match_mode FROM mappings m WHERE m.id = filter_rules.mapping_id) = 'any' THEN 0
          ELSE sort_order
        END`
+    );
+  });
+  // Must stay after the mappings-table rebuilds above, which only copy the columns they know about.
+  step('add keep-newest-per-extension column', () => {
+    addColumnIfMissing(
+      db,
+      'mappings',
+      'keep_newest_per_extension',
+      'keep_newest_per_extension INTEGER NOT NULL DEFAULT 0'
     );
   });
   step('add job daily times column', () => {

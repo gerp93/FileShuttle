@@ -169,7 +169,7 @@ export default function MappingCard({ record, onChanged }: Props) {
           <span className="badge">All files</span>
         )}
         {record.keepNewest != null && record.actionType !== 'copy' && record.actionType !== 'zip' && (
-          <span className="badge">Keep newest {record.keepNewest}</span>
+          <span className="badge">Keep newest {record.keepNewest}{record.keepNewestPerExtension ? ' per extension' : ''}</span>
         )}
       </div>
 
