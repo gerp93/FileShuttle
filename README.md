@@ -54,8 +54,39 @@ come from there rather than being reinvented locally.
 - **Background/tray mode** — closing the window keeps FileShuttle running
   in the system tray so schedules keep firing; optional start-at-login
   toggle in Settings.
+- **Assistant** — a chat panel (the robot button, bottom of the left rail) that
+  sets up mappings and jobs from a plain-language description and asks for
+  whatever you left out. See [Assistant](#assistant).
 - **Theming** — pick any [VisualAssault](https://github.com/gerp93/VisualAssault)
   color theme.
+
+## Assistant
+
+The chat panel slides out from the right on every page. Describe what you want
+("move PDFs older than 30 days from Downloads to D:\Archive every night") and it
+works out the mapping and job, checks the folders, previews what it would do,
+and asks before saving anything.
+
+It runs on the Claude runtime bundled with the app and signs in with your own
+Claude account (the panel walks you through it; FileShuttle never sees your
+password).
+
+What it can do:
+
+- read your mappings, jobs and run history, and review them for risky settings;
+- list the names, sizes and modified dates of the files in a folder (never what
+  is inside them);
+- preview a mapping or job — a dry run that changes nothing;
+- save mappings and jobs, once you approve each one on an approval card.
+
+What it can't do, enforced in code (`src/main/agent/`) rather than by its
+instructions: run a job, undo a run, delete a mapping or job, switch a job on, or
+touch any file. **Every job it saves is switched off**; open the Jobs page,
+review it (Preview shows what it would do), and turn it on yourself. It is also
+given none of Claude's built-in tools and none of your other Claude connectors.
+
+File and folder *names* it looks at are sent to Claude to answer you; file
+contents never are.
 
 ## Safety and undo
 
@@ -147,6 +178,9 @@ npm run package
   - `database/` — sql.js, schema/migrations, crash-safe file writes
   - `services/` — running jobs, previews, retention, start-at-login
   - `scheduler/` — interval/daily scheduler and the folder watcher
+  - `agent/` — the in-app assistant: `tools.ts` (the only things it can do),
+    `actions.ts` (what saving is allowed to change), `session.ts` (approvals),
+    `prompt.ts`
 - `src/main/preload.ts` — typed bridge to the renderer
 - `src/renderer/` — React UI (Jobs, Mappings, Editor, History, Settings)
 - `src/shared/` — types and pure logic shared by both sides: validation, path

@@ -1,0 +1,270 @@
+/* In-app assistant: a panel that pushes out from the right edge on every page. Uses the theme variables. */
+.nav-assistant {
+  margin-top: auto;
+  position: relative;
+}
+
+.nav-assistant-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-accent-blue);
+}
+
+.assistant-attention .nav-assistant-dot {
+  background: var(--color-accent-red);
+}
+
+.assistant-attention {
+  outline: 2px solid var(--color-accent-red);
+}
+
+.assistant-dock {
+  width: 400px;
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  box-shadow: -6px 0 18px rgba(0, 0, 0, 0.25);
+}
+
+.assistant-dock-closed {
+  display: none;
+}
+
+.assistant-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 14px 12px;
+  gap: 8px;
+}
+
+.assistant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assistant-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.assistant-btn-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 0;
+}
+
+.assistant-btn-row button {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+.assistant-intro {
+  margin: 0;
+}
+
+.assistant-scope {
+  font-size: 12px;
+}
+
+.assistant-scope summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+
+.assistant-scope ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
+.assistant-scope li {
+  margin-bottom: 4px;
+}
+
+.assistant-banner {
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  font-size: 13px;
+}
+
+.assistant-banner p {
+  margin: 0 0 8px;
+}
+
+.assistant-list {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.assistant-msg {
+  max-width: 94%;
+  padding: 7px 11px;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.assistant-user {
+  align-self: flex-end;
+  background: var(--color-primary-action);
+}
+
+.assistant-reply {
+  align-self: flex-start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.assistant-note {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.assistant-note-error {
+  color: var(--color-accent-red);
+}
+
+.assistant-tool {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.assistant-tool summary {
+  cursor: pointer;
+}
+
+.assistant-tool-error summary {
+  color: var(--color-accent-red);
+}
+
+.assistant-code {
+  margin: 4px 0;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--color-text);
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant-approval {
+  padding: 10px 12px;
+  border: 1px solid var(--color-accent-blue);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.assistant-approval-danger {
+  border-color: var(--color-accent-red);
+}
+
+.assistant-approval-title {
+  margin: 0 0 6px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.assistant-approval-warn {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--color-accent-red);
+  font-weight: 600;
+}
+
+.assistant-approval-rows {
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.assistant-approval-rows div {
+  display: flex;
+  gap: 8px;
+  margin: 3px 0;
+}
+
+.assistant-approval-rows dt {
+  min-width: 92px;
+  color: var(--color-text-muted);
+}
+
+.assistant-approval-rows dd {
+  margin: 0;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant-approval .assistant-btn-row {
+  margin-top: 8px;
+}
+
+.assistant-examples {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.assistant-chip {
+  appearance: none;
+  text-align: left;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  border-radius: 14px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.assistant-chip:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.assistant-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.assistant-form {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.assistant-input {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  font: inherit;
+  font-size: 14px;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+}

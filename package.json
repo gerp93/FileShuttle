@@ -45,6 +45,7 @@
     "wait-on": "^7.2.0"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.319",
     "chokidar": "^4.0.3",
     "electron-updater": "^6.8.9",
     "node-cron": "^3.0.3",
@@ -53,7 +54,8 @@
     "react-router-dom": "^6.20.1",
     "sql.js": "^1.10.3",
     "yauzl": "^3.4.0",
-    "yazl": "^3.3.1"
+    "yazl": "^3.3.1",
+    "zod": "^4.6.7"
   },
   "build": {
     "appId": "com.fileshuttle.app",
@@ -61,6 +63,13 @@
     "files": [
       "dist/**/*",
       "assets/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/@anthropic-ai/claude-agent-sdk/**",
+      "node_modules/@anthropic-ai/claude-agent-sdk-*/**",
+      "node_modules/zod/package.json",
+      "node_modules/zod/v4/**/*.js",
+      "node_modules/zod/v4/**/package.json"
     ],
     "directories": {
       "output": "release"
