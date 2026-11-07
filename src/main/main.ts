@@ -31,6 +31,7 @@ import { validateMappingInput } from '../shared/validation';
 import { checkFolder, nearestExistingFolder } from './folderCheck';
 import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
+import { AgentSession } from './agent/session';
 import { SchedulerService } from './scheduler/scheduler';
 import { WatcherService } from './scheduler/watcher';
 import {
@@ -61,6 +62,7 @@ let db: Database | null = null;
 let scheduler: SchedulerService | null = null;
 let watcher: WatcherService | null = null;
 let retention: RetentionService | null = null;
+let agent: AgentSession | null = null;
 let announcedBackground = false;
 let isQuitting = false;
 // Guards against a real race: if a second launch attempt's 'second-instance'
@@ -401,7 +403,42 @@ function assertValidJob(input: CreateJobInput): void {
   if (problem) throw new Error(problem);
 }
 
+/**
+ * The in-app assistant. It is created on first use. It can only look at mappings, jobs, history and
+ * folder listings, and save mappings/jobs the user approves (jobs always saved switched off); see
+ * agent/actions.ts. It has no way to run, delete or enable anything.
+ */
+function getAgent(): AgentSession {
+  if (!agent) {
+    agent = new AgentSession(
+      (event) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('agent:event', event);
+      },
+      {
+        getDb: () => db!,
+        afterChange: () => {
+          saveDatabase(db!);
+          scheduler?.reloadJobs();
+          watcher?.reloadJobs();
+        },
+      },
+      path.join(app.getPath('userData'), 'assistant')
+    );
+  }
+  return agent;
+}
+
 function registerIPCHandlers(): void {
+  ipcMain.handle('agent:send', (_, text: string) => getAgent().send(String(text ?? '')));
+  ipcMain.handle('agent:interrupt', () => getAgent().interrupt());
+  ipcMain.handle('agent:reset', () => getAgent().reset());
+  ipcMain.handle('agent:approve', (_, requestId: string, allow: boolean) =>
+    getAgent().approve(String(requestId), allow === true)
+  );
+  ipcMain.handle('agent:login', () => getAgent().login());
+  ipcMain.handle('agent:loginCode', (_, code: string) => getAgent().submitLoginCode(String(code ?? '')));
+  ipcMain.handle('agent:authStatus', () => getAgent().authStatus());
+
   ipcMain.handle('mappings:list', () => {
     return repo.listMappings(db!);
   });
@@ -746,6 +783,7 @@ app.on('before-quit', () => {
   scheduler?.shutdown();
   watcher?.shutdown();
   retention?.shutdown();
+  agent?.dispose();
   if (db) saveDatabase(db);
 });
 

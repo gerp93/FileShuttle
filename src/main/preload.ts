@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { AgentApi, AgentEvent } from '../shared/agentTypes';
 import {
   CreateJobInput,
   CreateMappingInput,
@@ -26,6 +27,7 @@ import {
 } from '../shared/types';
 
 export interface FileShuttleAPI {
+  agent: AgentApi;
   mappings: {
     list: () => Promise<MappingRecord[]>;
     get: (id: number) => Promise<MappingRecord | null>;
@@ -96,6 +98,22 @@ export interface FileShuttleAPI {
 }
 
 const api: FileShuttleAPI = {
+  agent: {
+    send: (text) => ipcRenderer.invoke('agent:send', text),
+    interrupt: () => ipcRenderer.invoke('agent:interrupt'),
+    reset: () => ipcRenderer.invoke('agent:reset'),
+    approve: (requestId, allow) => ipcRenderer.invoke('agent:approve', requestId, allow),
+    login: () => ipcRenderer.invoke('agent:login'),
+    submitLoginCode: (code) => ipcRenderer.invoke('agent:loginCode', code),
+    authStatus: () => ipcRenderer.invoke('agent:authStatus'),
+    onEvent: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => listener(payload);
+      ipcRenderer.on('agent:event', handler);
+      return () => {
+        ipcRenderer.removeListener('agent:event', handler);
+      };
+    },
+  },
   mappings: {
     list: () => ipcRenderer.invoke('mappings:list'),
     get: (id) => ipcRenderer.invoke('mappings:get', id),

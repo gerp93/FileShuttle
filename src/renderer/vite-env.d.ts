@@ -25,8 +25,10 @@ import type {
   UpdateJobInput,
   UpdateMappingInput,
 } from '../shared/types';
+import type { AgentApi } from '../shared/agentTypes';
 
 interface FileShuttleAPI {
+  agent: AgentApi;
   mappings: {
     list: () => Promise<MappingRecord[]>;
     get: (id: number) => Promise<MappingRecord | null>;
