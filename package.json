@@ -103,7 +103,8 @@
           ]
         }
       ],
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "x64ArchFiles": "**/claude-agent-sdk-darwin-*/claude"
     },
     "linux": {
       "target": [
@@ -121,6 +122,7 @@
       "owner": "gerp93",
       "repo": "FileShuttle",
       "releaseType": "release"
-    }
+    },
+    "beforePack": "scripts/before-pack.js"
   }
 }
