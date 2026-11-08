@@ -1,3 +1,4 @@
+import { DownloadOrigin, matchesDownloadSource, PARTIAL_DOWNLOAD_EXTENSIONS } from '../../shared/downloadSource';
 import { groupFilters } from '../../shared/filterGroups';
 import { FilterRule } from '../../shared/types';
 
@@ -38,20 +39,20 @@ export function partitionKeepNewest<T extends RankedFile>(
   return { kept, rest };
 }
 
-export function evaluateFilters(
-  filePath: string,
-  stat: { size: number; mtimeMs: number; birthtimeMs: number },
-  filters: FilterRule[]
-): boolean {
+/** What the filters can look at for one file. `origin` is only read when a rule needs it. */
+export interface FileFacts {
+  size: number;
+  mtimeMs: number;
+  birthtimeMs: number;
+  origin?: DownloadOrigin | null;
+}
+
+export function evaluateFilters(filePath: string, stat: FileFacts, filters: FilterRule[]): boolean {
   // Every group must be satisfied; within a group any one rule is enough.
   return groupFilters(filters).every((group) => group.some((rule) => matchesFilter(filePath, stat, rule)));
 }
 
-export function matchesFilter(
-  filePath: string,
-  stat: { size: number; mtimeMs: number; birthtimeMs: number },
-  rule: FilterRule
-): boolean {
+export function matchesFilter(filePath: string, stat: FileFacts, rule: FilterRule): boolean {
   const fileName = pathBasename(filePath);
   switch (rule.field) {
     case 'extension':
@@ -66,6 +67,10 @@ export function matchesFilter(
       return matchDate(stat.mtimeMs, rule.operator, rule.value);
     case 'created_date':
       return matchDate(stat.birthtimeMs, rule.operator, rule.value);
+    case 'download_source':
+      // A browser's in-progress temp file is not the finished download yet.
+      if (PARTIAL_DOWNLOAD_EXTENSIONS.has(extensionOf(filePath))) return false;
+      return matchesDownloadSource(stat.origin, rule.value);
     default:
       throw new Error(`Unknown filter field: ${rule.field}`);
   }

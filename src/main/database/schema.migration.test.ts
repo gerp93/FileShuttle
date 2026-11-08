@@ -238,3 +238,78 @@ describe('keep newest per extension', () => {
     expect(repo.getMapping(db, id)).toMatchObject({ keepNewest: 3, keepNewestPerExtension: false });
   });
 });
+
+describe('download source filter field', () => {
+  const baseMapping = {
+    name: 'm',
+    sourcePath: 'C:\in',
+    destPath: 'C:\out',
+    recursive: false,
+    conflictPolicy: 'skip' as const,
+    enabled: true,
+    scheduleType: 'manual' as const,
+    scheduleIntervalMinutes: null,
+    scheduleDailyTime: null,
+    nextMappingId: null,
+    actionType: 'move' as const,
+    keepNewest: null,
+    keepNewestPerExtension: false,
+  };
+
+  it('is accepted on a fresh database and round-trips', async () => {
+    db = await initDatabase(dbPath);
+    const id = repo.createMapping(db, {
+      ...baseMapping,
+      filters: [{ field: 'download_source', operator: 'matches', value: 'github.com', group: 0 }],
+    });
+    expect(repo.getMapping(db, id)?.filters).toEqual([
+      { field: 'download_source', operator: 'matches', value: 'github.com', group: 0 },
+    ]);
+  });
+
+  it('rebuilds an older database, keeping every existing rule, mapping and group', async () => {
+    db = await initDatabase(dbPath);
+    const id = repo.createMapping(db, {
+      ...baseMapping,
+      filters: [
+        { field: 'extension', operator: 'equals', value: 'zip', group: 0 },
+        { field: 'size', operator: 'min', value: '100', group: 1 },
+      ],
+    });
+    // Put the table back the way the previous release created it: no download_source in the CHECK.
+    db.run('DROP TABLE filter_rules');
+    db.run(`CREATE TABLE filter_rules (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      mapping_id   INTEGER NOT NULL REFERENCES mappings(id) ON DELETE CASCADE,
+      field        TEXT NOT NULL CHECK (field IN
+                   ('extension','filename_glob','filename_regex','size','modified_date','created_date')),
+      operator     TEXT NOT NULL CHECK (operator IN ('equals','matches','min','max','before','after')),
+      value        TEXT NOT NULL,
+      sort_order   INTEGER NOT NULL DEFAULT 0,
+      group_index  INTEGER NOT NULL DEFAULT 0
+    )`);
+    db.run(
+      `INSERT INTO filter_rules (mapping_id, field, operator, value, sort_order, group_index) VALUES
+       (${id}, 'extension', 'equals', 'zip', 0, 0), (${id}, 'size', 'min', '100', 1, 1)`
+    );
+    expect(() =>
+      db!.run(
+        `INSERT INTO filter_rules (mapping_id, field, operator, value) VALUES (${id}, 'download_source', 'matches', 'x.com')`
+      )
+    ).toThrow();
+    saveDatabase(db);
+    db.close();
+
+    db = await initDatabase(dbPath);
+
+    expect(repo.getMapping(db, id)?.filters).toEqual([
+      { field: 'extension', operator: 'equals', value: 'zip', group: 0 },
+      { field: 'size', operator: 'min', value: '100', group: 1 },
+    ]);
+    repo.updateMapping(db, id, {
+      ...baseMapping,
+      filters: [{ field: 'download_source', operator: 'matches', value: 'github.com', group: 0 }],
+    });
+    expect(repo.getMapping(db, id)?.filters).toHaveLength(1);
+  });
+});
