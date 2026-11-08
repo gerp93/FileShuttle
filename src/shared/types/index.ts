@@ -5,6 +5,7 @@ export const FILTER_FIELDS = [
   'size',
   'modified_date',
   'created_date',
+  'download_source',
 ] as const;
 
 export type FilterField = (typeof FILTER_FIELDS)[number];

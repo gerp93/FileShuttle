@@ -1,3 +1,4 @@
+import { validateSourcePattern } from './downloadSource';
 import { validateMappingPaths } from './pathSafety';
 import type { CreateMappingInput, FilterField, FilterRule } from './types';
 
@@ -14,6 +15,7 @@ const OPERATORS_BY_FIELD: Record<FilterField, readonly string[]> = {
   size: ['min', 'max'],
   modified_date: ['before', 'after'],
   created_date: ['before', 'after'],
+  download_source: ['matches'],
 };
 
 const FIELD_NAMES: Record<FilterField, string> = {
@@ -23,6 +25,7 @@ const FIELD_NAMES: Record<FilterField, string> = {
   size: 'File size',
   modified_date: 'Modified date',
   created_date: 'Created date',
+  download_source: 'Download source',
 };
 
 /** Returns what is wrong with one filter rule, or null when it is usable. */
@@ -47,6 +50,8 @@ export function validateFilterRule(rule: FilterRule): string | null {
       return /^\d+$/.test(value) && Number.isSafeInteger(Number(value))
         ? null
         : 'size must be a whole number of bytes, e.g. 1048576';
+    case 'download_source':
+      return validateSourcePattern(value);
     case 'modified_date':
     case 'created_date':
       return Number.isNaN(new Date(value).getTime()) ? 'not a valid date — use YYYY-MM-DD' : null;

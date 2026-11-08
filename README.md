@@ -25,7 +25,7 @@ come from there rather than being reinvented locally.
   Unzip extracts matching `.zip` files into a same-named subfolder of the
   destination, then sends the original zip to the Recycle Bin.
 - **Filters** — 0 to N rules per mapping (extension, wildcard/regex
-  filename, size in bytes, modified/created date). Rules are grouped: a file
+  filename, size in bytes, modified/created date, download source). Rules are grouped: a file
   must satisfy every group (AND), and inside a group any one rule is enough
   (OR), so `(zip OR bak) AND larger than 1 MB` is one mapping. Filters are
   validated when you save, so a bad regex or a size like `5MB` is caught
@@ -132,6 +132,18 @@ what Undo will do before you confirm.
 
 ### Things to know
 
+- The **Download source** filter sorts browser downloads by the website they came
+  from. It reads the origin Windows browsers record on every downloaded file (the
+  `Zone.Identifier` stream), and checks both the page you started the download on
+  and the URL the file was fetched from, so `github.com` catches files served from
+  its CDN too. Enter a domain (`github.com`, which also covers its subdomains) or
+  a domain with a path (`github.com/owner/repo`). Files with no recorded origin
+  (made by another program, copied off an NTFS drive, extracted from a zip) never
+  match and are simply left alone, as are a browser's unfinished `.crdownload` /
+  `.part` files. Windows only. To sort a Downloads folder, make one move mapping
+  per website, put them in a watch job in the order you want them to win, and give
+  each a different destination: a moved file is gone, so the first matching
+  mapping claims it.
 - A **watch** trigger runs the *whole job* (every mapping, in order), not just
   the new file. Folders a job writes into are never watched, so a chained job
   can't re-trigger itself.

@@ -39,6 +39,7 @@ When the user asks you to analyze or review existing jobs, read them (list_jobs,
   - filename_regex / matches: regular expression tested against the file name.
   - size / min or max: whole number of BYTES (1 MB = 1048576).
   - modified_date or created_date / before or after: date as YYYY-MM-DD. "Older than 30 days" = modified_date before <today minus 30 days>.
+  - download_source / matches: the website a file was downloaded from, as a domain such as "github.com" (also matches its subdomains) or a domain plus path such as "github.com/owner/repo". It checks both the page the download started on and the URL it was fetched from, using the origin Windows browsers record on the file. Files with no recorded origin (not from a browser, or copied off an NTFS drive) never match, and a browser's unfinished .crdownload/.part files are skipped. Windows only.
   - Groups: filters sharing a group number are OR'd (any one is enough); different groups are AND'd (all groups must match). Give each condition its own group number unless the user means "either of these". Example: PDFs OR Word files that are older than a date = group 0: extension equals pdf, extension equals docx; group 1: modified_date before 2026-01-01.
   - No filters = every file in the source.
 - keepNewest: leave the N newest matching files where they are and act on the rest (by modified time). keepNewestPerExtension applies N to each extension separately. It is ignored for copy and zip.

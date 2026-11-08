@@ -37,7 +37,7 @@ const STATEMENTS = [
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     mapping_id   INTEGER NOT NULL REFERENCES mappings(id) ON DELETE CASCADE,
     field        TEXT NOT NULL CHECK (field IN
-                 ('extension','filename_glob','filename_regex','size','modified_date','created_date')),
+                 ('extension','filename_glob','filename_regex','size','modified_date','created_date','download_source')),
     operator     TEXT NOT NULL CHECK (operator IN ('equals','matches','min','max','before','after')),
     value        TEXT NOT NULL,
     sort_order   INTEGER NOT NULL DEFAULT 0,
@@ -339,6 +339,36 @@ function widenJobsScheduleTypeCheckForWatch(db: Database): void {
   db.run('PRAGMA foreign_keys = ON');
 }
 
+/**
+ * SQLite can't change a CHECK in place, so databases created before the
+ * "download source" filter existed are rebuilt with the wider field list.
+ * Every existing rule is copied across unchanged.
+ */
+function widenFilterFieldCheckForDownloadSource(db: Database): void {
+  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='filter_rules'");
+  if (!rows.length || !rows[0].values.length) return;
+  const sql = String(rows[0].values[0][0] ?? '');
+  if (sql.includes("'download_source'")) return;
+
+  db.run('PRAGMA foreign_keys = OFF');
+  db.run(`CREATE TABLE filter_rules_new (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    mapping_id   INTEGER NOT NULL REFERENCES mappings(id) ON DELETE CASCADE,
+    field        TEXT NOT NULL CHECK (field IN
+                 ('extension','filename_glob','filename_regex','size','modified_date','created_date','download_source')),
+    operator     TEXT NOT NULL CHECK (operator IN ('equals','matches','min','max','before','after')),
+    value        TEXT NOT NULL,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    group_index  INTEGER NOT NULL DEFAULT 0
+  )`);
+  db.run(`INSERT INTO filter_rules_new (id, mapping_id, field, operator, value, sort_order, group_index)
+    SELECT old.id, old.mapping_id, old.field, old.operator, old.value, old.sort_order, old.group_index
+    FROM filter_rules old INNER JOIN mappings m ON m.id = old.mapping_id`);
+  db.run('DROP TABLE filter_rules');
+  db.run('ALTER TABLE filter_rules_new RENAME TO filter_rules');
+  db.run('PRAGMA foreign_keys = ON');
+}
+
 function initSchema(db: Database): void {
   const step = (label: string, fn: () => void) => {
     logStartupStep(`initSchema: ${label}`);
@@ -406,6 +436,8 @@ function initSchema(db: Database): void {
        END`
     );
   });
+  // Must stay after 'add filter group column' above: this rebuild copies group_index.
+  step('widenFilterFieldCheckForDownloadSource', () => widenFilterFieldCheckForDownloadSource(db));
   // Must stay after the mappings-table rebuilds above, which only copy the columns they know about.
   step('add keep-newest-per-extension column', () => {
     addColumnIfMissing(

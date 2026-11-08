@@ -7,6 +7,7 @@ const FIELD_LABELS: Record<string, string> = {
   size: 'File size (bytes)',
   modified_date: 'Modified date',
   created_date: 'Created date',
+  download_source: 'Download source (website)',
 };
 
 const OPERATORS_BY_FIELD: Record<string, Array<[string, string]>> = {
@@ -16,6 +17,7 @@ const OPERATORS_BY_FIELD: Record<string, Array<[string, string]>> = {
   size: [['min', 'at least'], ['max', 'at most']],
   modified_date: [['before', 'before'], ['after', 'after']],
   created_date: [['before', 'before'], ['after', 'after']],
+  download_source: [['matches', 'was downloaded from']],
 };
 
 const VALUE_HINTS: Record<string, string> = {
@@ -25,6 +27,7 @@ const VALUE_HINTS: Record<string, string> = {
   size: 'bytes, e.g. 1048576',
   modified_date: 'YYYY-MM-DD',
   created_date: 'YYYY-MM-DD',
+  download_source: 'e.g. github.com or github.com/owner/repo',
 };
 
 interface Props {

@@ -4,7 +4,8 @@ import { normalizeFolder, validateMappingPaths } from '../../shared/pathSafety';
 import { FileOutcome, MappingConfig, RunResult } from '../../shared/types';
 import { validateFilters } from '../../shared/validation';
 import { buildRunResult } from '../database/repository';
-import { evaluateFilters, partitionKeepNewest } from './filters';
+import { readDownloadOrigin } from './downloadOrigin';
+import { evaluateFilters, FileFacts, partitionKeepNewest } from './filters';
 import { electronTrash, TrashFn } from './trash';
 import {
   createZip,
@@ -204,6 +205,8 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
 
   const isZip = mapping.actionType === 'zip';
   const candidates: Candidate[] = [];
+  // Reading a file's download origin costs an extra open per file, so only do it when a rule asks.
+  const needsOrigin = mapping.filters.some((rule) => rule.field === 'download_source');
 
   // Scan: list the source folder and stat/filter in bounded parallel batches.
   // Everything here is async, so a huge folder never freezes the app.
@@ -248,7 +251,7 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
     const stats = await Promise.all(
       batch.map((p) =>
         fs.promises.stat(p).then(
-          (stat) => ({ stat }),
+          async (stat) => ({ stat, origin: needsOrigin ? await readDownloadOrigin(p) : null }),
           (err: unknown) => ({ err })
         )
       )
@@ -259,11 +262,16 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
         outcomes.push({ sourcePath: entryPath, destPath: null, outcome: 'error', reason: String(result.err), sizeBytes: null });
         return;
       }
-      const { stat } = result;
+      const { stat, origin } = result;
       const matched = matchesMapping(
         mapping,
         entryPath,
-        { size: isZip && stat.isDirectory() ? 0 : stat.size, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs },
+        {
+          size: isZip && stat.isDirectory() ? 0 : stat.size,
+          mtimeMs: stat.mtimeMs,
+          birthtimeMs: stat.birthtimeMs,
+          origin,
+        },
         outcomes
       );
       if (matched) candidates.push({ filePath: entryPath, mtimeMs: stat.mtimeMs, stat });
@@ -315,7 +323,7 @@ export async function runMapping(mapping: MappingConfig, options: RunOptions = {
 function matchesMapping(
   mapping: MappingConfig,
   filePath: string,
-  stat: { size: number; mtimeMs: number; birthtimeMs: number },
+  stat: FileFacts,
   outcomes: FileOutcome[]
 ): boolean {
   try {
