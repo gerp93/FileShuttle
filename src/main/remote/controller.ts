@@ -1,4 +1,4 @@
-import type { Database } from 'sql.js';
+import type { Database } from '../database/sqlite';
 import type { HandlerMap } from '../api/handlers';
 import { HTTP_CHANNELS } from '../api/channels';
 import { RemoteServer, BIND_HOST } from './server';
@@ -12,7 +12,6 @@ import type { RemoteSettingsInput, RemoteState } from '../../shared/types';
 
 export interface RemoteControllerDeps {
   getDb: () => Database;
-  save: () => void;
   handlers: HandlerMap;
   /** The built renderer the phone is served. */
   staticDir: string;
@@ -73,7 +72,6 @@ export class RemoteController {
   async setSettings(input: RemoteSettingsInput): Promise<RemoteState> {
     const before = getRemoteSettings(this.deps.getDb());
     setRemoteSettings(this.deps.getDb(), input);
-    this.deps.save();
     const after = getRemoteSettings(this.deps.getDb());
     // The allowed logins are read on every request; only these need a restart.
     if (before.enabled !== after.enabled || before.port !== after.port || (after.enabled && !this.server)) {
@@ -85,7 +83,6 @@ export class RemoteController {
   /** Saves a new password (hashed) and signs every phone out. */
   async setPassword(password: string): Promise<RemoteState> {
     await setRemotePassword(this.deps.getDb(), password);
-    this.deps.save();
     this.server?.clearSessions();
     return this.state();
   }

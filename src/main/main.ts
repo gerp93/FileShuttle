@@ -3,8 +3,8 @@ import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
-import { Database } from 'sql.js';
-import { initDatabase, saveDatabase, takeRecoveryNotice } from './database/schema';
+import { Database } from './database/sqlite';
+import { flushDatabase, initDatabase, takeRecoveryNotice } from './database/schema';
 import * as repo from './database/repository';
 import {
   pinUserDataPath,
@@ -47,7 +47,7 @@ let announcedBackground = false;
 let isQuitting = false;
 // Guards against a real race: if a second launch attempt's 'second-instance'
 // event lands while this process is still awaiting initDatabase() (loading
-// the sql.js WASM engine takes a moment), showWindow() would see mainWindow
+// the database takes a moment), showWindow() would see mainWindow
 // as still null and create a *second* window ahead of the real startup
 // flow -- one whose renderer calls the API before registerIPCHandlers() has
 // run, permanently stuck showing "No handler registered" / default values,
@@ -385,7 +385,6 @@ function getAgent(): AgentSession {
       {
         getDb: () => db!,
         afterChange: () => {
-          saveDatabase(db!);
           scheduler?.reloadJobs();
           watcher?.reloadJobs();
         },
@@ -401,7 +400,6 @@ function registerIPCHandlers(): void {
   // (api/handlers.ts); the HTTP server calls the very same functions.
   const handlers = createHandlers({
     getDb: () => db!,
-    save: () => saveDatabase(db!),
     reloadJobs: () => {
       scheduler?.reloadJobs();
       watcher?.reloadJobs();
@@ -414,7 +412,6 @@ function registerIPCHandlers(): void {
 
   remote = new RemoteController({
     getDb: () => db!,
-    save: () => saveDatabase(db!),
     handlers,
     // Same folder loadAppContent() opens in a packaged build.
     staticDir: path.join(__dirname, '../../renderer'),
@@ -494,15 +491,13 @@ function registerIPCHandlers(): void {
   });
 
   ipcMain.handle('dbLocation:set', (_, newPath: string) => {
-    if (db) saveDatabase(db);
-    setDbPath(newPath);
+    setDbPath(newPath, db);
     app.relaunch();
     app.exit();
     return { success: true };
   });
 
   ipcMain.handle('dbLocation:resetToDefault', () => {
-    if (db) saveDatabase(db);
     resetToDefaultDbPath();
     app.relaunch();
     app.exit();
@@ -566,9 +561,7 @@ app.whenReady().then(async () => {
     db = await initDatabase();
     logStep('main: initDatabase() returned, calling migrateChainsToJobs()');
     repo.migrateChainsToJobs(db);
-    logStep('main: migrateChainsToJobs() done, calling saveDatabase()');
-    saveDatabase(db);
-    logStep('main: saveDatabase() done, starting retention service');
+    logStep('main: migrateChainsToJobs() done, starting retention service');
 
     retention = new RetentionService(db);
     retention.start();
@@ -627,7 +620,7 @@ app.on('before-quit', () => {
   retention?.shutdown();
   agent?.dispose();
   void remote?.shutdown();
-  if (db) saveDatabase(db);
+  if (db) flushDatabase(db);
 });
 
 app.on('window-all-closed', () => {

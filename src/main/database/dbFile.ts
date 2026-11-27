@@ -1,24 +1,29 @@
 import * as fs from 'fs';
+import { Database } from './sqlite';
 
 /**
- * Crash-safe persistence for the sql.js database file.
+ * File handling around the SQLite database file.
  *
- * sql.js holds the whole database in memory and we write the entire thing out
- * on every save. A plain writeFileSync truncates the file first, so a crash,
- * power cut, or full disk mid-write leaves a torn (or empty) database --
- * which then fails to open on the next launch. Instead:
+ * Until the switch to node:sqlite, the app kept the whole database in memory and
+ * rewrote the file on every save (sql.js). The first time the native driver opens an
+ * existing file it may change it (WAL mode, migrations), so a copy is made first,
+ * beside the original, and never deleted by the app.
  *
- *   1. write the new bytes to <db>.tmp and fsync it
- *   2. rename it over <db> (atomic replace on the same volume)
- *
- * and keep a rolling <db>.bak so a database that is somehow still unreadable
- * can be recovered automatically on startup.
+ * The database now runs in WAL mode: recent commits can sit in the -wal sidecar, so
+ * anything that copies the file must go through `copyDatabaseFile` (VACUUM INTO of the
+ * open database) or copy the sidecar too.
  */
 
+/** The copy made before the native driver first touches an existing database. */
+export const PRE_NATIVE_SUFFIX = '.pre-native-sqlite';
+/** The rolling backup the sql.js build kept; still used to recover an unreadable file. */
 export const BACKUP_SUFFIX = '.bak';
 const TMP_SUFFIX = '.tmp';
-const DEFAULT_BACKUP_MIN_AGE_MS = 5 * 60 * 1000;
 const RENAME_RETRIES = 5;
+
+export function preNativeCopyPathFor(dbPath: string): string {
+  return dbPath + PRE_NATIVE_SUFFIX;
+}
 
 export function backupPathFor(dbPath: string): string {
   return dbPath + BACKUP_SUFFIX;
@@ -46,45 +51,64 @@ function renameWithRetry(from: string, to: string): void {
   }
 }
 
-export function writeFileAtomic(filePath: string, data: Uint8Array): void {
-  const tmpPath = filePath + TMP_SUFFIX;
-  const fd = fs.openSync(tmpPath, 'w');
+/** Copies via a temp name and renames, so a crash never leaves a half copy under `to`. */
+function copyFileAtomic(from: string, to: string): void {
+  const tmp = to + TMP_SUFFIX;
   try {
-    fs.writeFileSync(fd, data);
-    fs.fsyncSync(fd);
+    fs.copyFileSync(from, tmp);
+    const fd = fs.openSync(tmp, 'r+');
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    renameWithRetry(tmp, to);
   } catch (err) {
-    fs.closeSync(fd);
-    fs.rmSync(tmpPath, { force: true });
-    throw err;
-  }
-  fs.closeSync(fd);
-
-  try {
-    renameWithRetry(tmpPath, filePath);
-  } catch (err) {
-    fs.rmSync(tmpPath, { force: true });
+    fs.rmSync(tmp, { force: true });
     throw err;
   }
 }
 
 /**
- * Copies the current database to <db>.bak, but at most once per `minAgeMs` --
- * saves happen on every edit, and re-copying a large history file each time
- * would be wasteful. Only call this while <db> is known to be good.
+ * Makes `<db>.pre-native-sqlite` from the existing file, but only when the database
+ * exists and that copy does not. Returns true when a copy was made. The app never
+ * deletes it. A leftover -wal (only possible if a native build already ran) goes with it.
  */
-export function refreshBackup(dbPath: string, minAgeMs = DEFAULT_BACKUP_MIN_AGE_MS): boolean {
+export function copyBeforeFirstNativeOpen(dbPath: string): boolean {
   if (!fs.existsSync(dbPath)) return false;
-  const backupPath = backupPathFor(dbPath);
-  if (fs.existsSync(backupPath) && Date.now() - fs.statSync(backupPath).mtimeMs < minAgeMs) {
-    return false;
+  const copyPath = preNativeCopyPathFor(dbPath);
+  if (fs.existsSync(copyPath)) return false;
+  const wal = dbPath + '-wal';
+  if (fs.existsSync(wal) && fs.statSync(wal).size > 0) {
+    copyFileAtomic(wal, copyPath + '-wal');
   }
-  writeFileAtomic(backupPath, fs.readFileSync(dbPath));
+  copyFileAtomic(dbPath, copyPath);
   return true;
 }
 
-export function saveDatabaseFile(dbPath: string, data: Uint8Array, backupMinAgeMs?: number): void {
-  refreshBackup(dbPath, backupMinAgeMs);
-  writeFileAtomic(dbPath, data);
+/**
+ * Copies a database to `to` (which must not exist), including recent commits that
+ * are still in the -wal. With the open `db` it uses VACUUM INTO, which writes a
+ * consistent single file; without one it copies the file and its -wal sidecar.
+ */
+export function copyDatabaseFile(from: string, to: string, db?: Database | null): void {
+  if (db) {
+    const tmp = to + TMP_SUFFIX;
+    fs.rmSync(tmp, { force: true });
+    try {
+      db.prepare('VACUUM INTO ?').run(tmp);
+      renameWithRetry(tmp, to);
+    } catch (err) {
+      fs.rmSync(tmp, { force: true });
+      throw err;
+    }
+    return;
+  }
+  const wal = from + '-wal';
+  if (fs.existsSync(wal) && fs.statSync(wal).size > 0) {
+    copyFileAtomic(wal, to + '-wal');
+  }
+  copyFileAtomic(from, to);
 }
 
 export interface LoadResult<T> {
@@ -95,24 +119,21 @@ export interface LoadResult<T> {
 }
 
 /**
- * Opens <db>; if it is present but unreadable, falls back to <db>.bak.
- * `open` receives null when there is no file yet (a fresh install) and must
- * throw if the bytes are not a usable database.
+ * Opens <db>; if it is present but unreadable, falls back to a <db>.bak left by the
+ * sql.js build. `open` receives the path to open and must throw if it is not a usable
+ * database. A missing file is opened as-is (a fresh install creates it).
  *
  * Nothing is ever deleted here: an unreadable file is renamed aside, and if
  * no usable copy exists the original is left exactly as it was.
  */
-export function loadWithBackupFallback<T>(
-  dbPath: string,
-  open: (bytes: Uint8Array | null) => T
-): LoadResult<T> {
+export function loadWithBackupFallback<T>(dbPath: string, open: (path: string) => T): LoadResult<T> {
   if (!fs.existsSync(dbPath)) {
-    return { value: open(null), recoveredFromBackup: false, quarantinedTo: null };
+    return { value: open(dbPath), recoveredFromBackup: false, quarantinedTo: null };
   }
 
   let mainError: unknown;
   try {
-    return { value: open(fs.readFileSync(dbPath)), recoveredFromBackup: false, quarantinedTo: null };
+    return { value: open(dbPath), recoveredFromBackup: false, quarantinedTo: null };
   } catch (err) {
     mainError = err;
   }
@@ -125,17 +146,28 @@ export function loadWithBackupFallback<T>(
     );
   }
 
-  let value: T;
+  // Try the backup in a scratch copy first so a bad backup is never promoted.
+  const scratch = `${dbPath}.restore-check`;
+  fs.rmSync(scratch, { force: true });
+  copyFileAtomic(backupPath, scratch);
   try {
-    value = open(fs.readFileSync(backupPath));
+    const probe = open(scratch) as unknown as { close?: () => void };
+    probe.close?.();
   } catch (backupError) {
+    fs.rmSync(scratch, { force: true });
     throw new Error(
       `The FileShuttle database at ${dbPath} could not be opened (${describe(mainError)}), and its backup could not be opened either (${describe(backupError)}). Both files have been left untouched.`
     );
   }
+  fs.rmSync(scratch, { force: true });
+  fs.rmSync(scratch + '-wal', { force: true });
+  fs.rmSync(scratch + '-shm', { force: true });
 
   const quarantinedTo = `${dbPath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
   renameWithRetry(dbPath, quarantinedTo);
-  writeFileAtomic(dbPath, fs.readFileSync(backupPath));
-  return { value, recoveredFromBackup: true, quarantinedTo };
+  for (const side of ['-wal', '-shm']) {
+    if (fs.existsSync(dbPath + side)) renameWithRetry(dbPath + side, quarantinedTo + side);
+  }
+  copyFileAtomic(backupPath, dbPath);
+  return { value: open(dbPath), recoveredFromBackup: true, quarantinedTo };
 }

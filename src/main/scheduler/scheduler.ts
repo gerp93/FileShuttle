@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { Database } from 'sql.js';
+import { Database } from '../database/sqlite';
 import { isJobOverdue } from '../../shared/schedule';
 import { JobRecord } from '../../shared/types';
 import * as repo from '../database/repository';

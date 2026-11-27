@@ -1,16 +1,16 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
+import { copyDatabaseFile } from './database/dbFile';
+import type { Database } from './database/sqlite';
 
 interface AppConfig {
   dbPath?: string;
 }
 
 // A local dev run (npm run dev) and a packaged/installed build must never
-// share a userData folder. The database layer (sql.js) keeps the whole file
-// in memory and overwrites it wholesale on every save, so if both were ever
-// open against the same file, whichever saved last would silently wipe out
-// the other's data. Call this before anything else touches
+// share a userData folder. Two app instances writing the same SQLite file (and its
+// -wal sidecar) is a recipe for lost or locked writes, so a dev run keeps its own data. Call this before anything else touches
 // app.getPath('userData') (must run before Electron's 'ready' event).
 export function pinUserDataPath(): void {
   // Lets scripts/smoke-test.js (and anyone debugging) run against a throwaway
@@ -62,11 +62,13 @@ export function isUsingDefaultLocation(): boolean {
   return !getConfiguredDbPath();
 }
 
-export function setDbPath(newPath: string): void {
+// `db` is the open connection to the current file, if any: the copy then goes through
+// VACUUM INTO so commits still in the -wal sidecar come along.
+export function setDbPath(newPath: string, db?: Database | null): void {
   const currentPath = getEffectiveDbPath();
   if (!fs.existsSync(newPath) && fs.existsSync(currentPath)) {
     fs.mkdirSync(path.dirname(newPath), { recursive: true });
-    fs.copyFileSync(currentPath, newPath);
+    copyDatabaseFile(currentPath, newPath, db);
   }
   writeConfig({ ...readConfig(), dbPath: newPath });
 }

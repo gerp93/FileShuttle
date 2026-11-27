@@ -1,4 +1,4 @@
-import type { Database } from 'sql.js';
+import type { Database } from '../database/sqlite';
 import * as repo from '../database/repository';
 import {
   DEFAULT_REMOTE_PORT,

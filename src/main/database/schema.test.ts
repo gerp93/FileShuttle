@@ -1,11 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import initSqlJs, { Database } from 'sql.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir, removeDir } from '../engine/testUtils';
-import { backupPathFor } from './dbFile';
+import { backupPathFor, preNativeCopyPathFor } from './dbFile';
 import { queryAll, queryOne, run } from './dbHelpers';
-import { initDatabase, repairIntegrity, saveDatabase, takeRecoveryNotice } from './schema';
+import { initDatabase, repairIntegrity, takeRecoveryNotice } from './schema';
+import { Database, openDatabase } from './sqlite';
 
 // schema.ts pulls in Electron-only modules for the default db location and the
 // startup log; neither is needed when an explicit path is passed.
@@ -41,18 +41,28 @@ function seedRun(d: Database): number {
   return runId;
 }
 
-describe('initDatabase / saveDatabase', () => {
+describe('initDatabase', () => {
   it('creates the database file on first run', async () => {
     db = await initDatabase(dbPath);
     expect(fs.existsSync(dbPath)).toBe(true);
     expect(queryAll(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='run_history'")).toHaveLength(1);
   });
 
-  it('keeps foreign keys enforced after a save (sql.js export() resets the pragma)', async () => {
+  it('opens in WAL mode with foreign keys enforced', async () => {
     db = await initDatabase(dbPath);
     expect(fkEnabled(db)).toBe(1);
-    saveDatabase(db);
-    expect(fkEnabled(db)).toBe(1);
+    expect(queryOne(db, 'PRAGMA journal_mode')?.journal_mode).toBe('wal');
+  });
+
+  it('writes go straight to disk: another connection sees them with no save step', async () => {
+    db = await initDatabase(dbPath);
+    seedRun(db);
+    const other = openDatabase(dbPath);
+    try {
+      expect(count(other, 'run_history')).toBe(1);
+    } finally {
+      other.close();
+    }
   });
 
   it('cascades deletes of a run to its file rows', async () => {
@@ -63,10 +73,9 @@ describe('initDatabase / saveDatabase', () => {
     expect(count(db, 'run_history_files')).toBe(0);
   });
 
-  it('round-trips data through a save and reopen', async () => {
+  it('round-trips data through a reopen', async () => {
     db = await initDatabase(dbPath);
     seedRun(db);
-    saveDatabase(db);
     db.close();
     db = await initDatabase(dbPath);
     expect(count(db, 'run_history')).toBe(1);
@@ -77,7 +86,7 @@ describe('initDatabase / saveDatabase', () => {
 describe('repairIntegrity', () => {
   it('removes orphaned rows and nulls dangling references left by older builds', async () => {
     db = await initDatabase(dbPath);
-    db.run('PRAGMA foreign_keys = OFF');
+    db.exec('PRAGMA foreign_keys = OFF');
     run(db, "INSERT INTO run_history_files (run_id, source_path, outcome) VALUES (999, '/orphan', 'moved')");
     run(db, "INSERT INTO filter_rules (mapping_id, field, operator, value) VALUES (999, 'extension', 'equals', 'x')");
     run(db, 'INSERT INTO job_steps (job_id, mapping_id) VALUES (999, 999)');
@@ -99,14 +108,14 @@ describe('repairIntegrity', () => {
 
   it('lets a run be recorded after repair even though its old mapping was deleted', async () => {
     db = await initDatabase(dbPath);
-    db.run('PRAGMA foreign_keys = OFF');
+    db.exec('PRAGMA foreign_keys = OFF');
     run(
       db,
       `INSERT INTO run_history (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at, status)
        VALUES (999, 'gone', 'manual', '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', 'success')`
     );
     repairIntegrity(db);
-    db.run('PRAGMA foreign_keys = ON');
+    db.exec('PRAGMA foreign_keys = ON');
     expect(() =>
       run(
         db!,
@@ -120,11 +129,10 @@ describe('repairIntegrity', () => {
 describe('recovery from a damaged database file', () => {
   /** Builds a real, valid database file at `target` containing one run. */
   async function writeValidDb(target: string): Promise<void> {
-    const SQL = await initSqlJs();
-    const tmp = new SQL.Database();
-    tmp.run('CREATE TABLE marker (v TEXT)');
-    tmp.run("INSERT INTO marker VALUES ('from-backup')");
-    fs.writeFileSync(target, Buffer.from(tmp.export()));
+    const tmp = openDatabase(target);
+    tmp.exec('CREATE TABLE marker (v TEXT)');
+    tmp.exec("INSERT INTO marker VALUES ('from-backup')");
+    tmp.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     tmp.close();
   }
 
@@ -136,7 +144,7 @@ describe('recovery from a damaged database file', () => {
 
     expect(queryOne(db, 'SELECT v FROM marker')?.v).toBe('from-backup');
     const notice = takeRecoveryNotice();
-    expect(notice).toMatch(/restored from the most recent automatic backup/);
+    expect(notice).toMatch(/restored from a backup copy/);
     expect(takeRecoveryNotice()).toBeNull();
     expect(fs.readdirSync(dir).some((f) => f.includes('.corrupt-'))).toBe(true);
   });
@@ -154,5 +162,53 @@ describe('recovery from a damaged database file', () => {
     fs.writeFileSync(dbPath, 'garbage with no backup');
     await expect(initDatabase(dbPath)).rejects.toThrow(/no backup/);
     expect(fs.readFileSync(dbPath, 'utf8')).toBe('garbage with no backup');
+  });
+});
+
+describe('copy before the first native open', () => {
+  /** A database file as the sql.js build left it: rollback journal, no -wal. */
+  function writeLegacyDb(target: string): void {
+    const legacy = openDatabase(target);
+    legacy.exec('PRAGMA journal_mode = DELETE');
+    legacy.exec('CREATE TABLE marker (v TEXT)');
+    legacy.exec("INSERT INTO marker VALUES ('original')");
+    legacy.close();
+  }
+
+  it('copies an existing database beside itself before anything changes it', async () => {
+    writeLegacyDb(dbPath);
+    const before = fs.readFileSync(dbPath);
+
+    db = await initDatabase(dbPath);
+
+    const copyPath = preNativeCopyPathFor(dbPath);
+    expect(fs.existsSync(copyPath)).toBe(true);
+    expect(fs.readFileSync(copyPath).equals(before)).toBe(true);
+    expect(fs.existsSync(copyPath + '.tmp')).toBe(false);
+    // The copy is the untouched original: no migrations, still a rollback-journal file.
+    const copy = openDatabase(copyPath);
+    try {
+      expect(queryAll(copy, "SELECT name FROM sqlite_master WHERE name='run_history'")).toHaveLength(0);
+    } finally {
+      copy.close();
+    }
+  });
+
+  it('does not overwrite an existing copy on later launches', async () => {
+    writeLegacyDb(dbPath);
+    db = await initDatabase(dbPath);
+    const copyPath = preNativeCopyPathFor(dbPath);
+    const first = fs.readFileSync(copyPath);
+    run(db, "INSERT INTO app_settings (key, value) VALUES ('later', 'x')");
+    db.close();
+
+    db = await initDatabase(dbPath);
+
+    expect(fs.readFileSync(copyPath).equals(first)).toBe(true);
+  });
+
+  it('makes no copy on a fresh install', async () => {
+    db = await initDatabase(dbPath);
+    expect(fs.existsSync(preNativeCopyPathFor(dbPath))).toBe(false);
   });
 });

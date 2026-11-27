@@ -1,4 +1,4 @@
-import type { Database } from 'sql.js';
+import type { Database } from '../database/sqlite';
 import * as repo from '../database/repository';
 import {
   cancelJob,
@@ -34,8 +34,6 @@ export type HandlerMap = Record<string, Handler>;
 
 export interface HandlerDeps {
   getDb: () => Database;
-  /** Writes the database to disk. */
-  save: () => void;
   /** Rebuilds schedules and folder watchers after a mapping or job changed. */
   reloadJobs: () => void;
   getVersion: () => string;
@@ -60,7 +58,6 @@ function assertValidJob(input: CreateJobInput): void {
 export function createHandlers(deps: HandlerDeps): HandlerMap {
   const db = () => deps.getDb();
   const changed = () => {
-    deps.save();
     deps.reloadJobs();
   };
 
@@ -174,14 +171,12 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
 
     'settings:setTheme': (themeId: string) => {
       repo.setSetting(db(), 'theme', themeId);
-      deps.save();
     },
 
     'settings:getOverwriteBackup': () => repo.getOverwriteBackup(db()),
 
     'settings:setOverwriteBackup': (enabled: boolean) => {
       repo.setOverwriteBackup(db(), enabled);
-      deps.save();
     },
 
     'settings:getUnzipLimits': () => repo.getUnzipLimitsSetting(db()),
@@ -190,7 +185,6 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
       const problem = validateUnzipLimits(limits);
       if (problem) throw new Error(problem);
       repo.setUnzipLimitsSetting(db(), limits);
-      deps.save();
     },
 
     'settings:getLogRetention': () => getLogRetention(db()),

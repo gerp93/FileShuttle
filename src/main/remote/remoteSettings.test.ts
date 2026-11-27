@@ -2,7 +2,7 @@ import * as http from 'http';
 import * as net from 'net';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Database } from 'sql.js';
+import type { Database } from '../database/sqlite';
 import * as repo from '../database/repository';
 import { initDatabase } from '../database/schema';
 import { makeTempDir, removeDir, writeFile } from '../engine/testUtils';
@@ -87,7 +87,6 @@ describe('RemoteController', () => {
     writeFile(path.join(root, 'www', 'index.html'), '<html></html>');
     const controller = new RemoteController({
       getDb: () => db,
-      save: () => undefined,
       handlers: { 'app:getVersion': () => '1' },
       staticDir: path.join(root, 'www'),
     });
@@ -113,7 +112,6 @@ describe('RemoteController', () => {
     const port = (blocker.address() as net.AddressInfo).port;
     const controller = new RemoteController({
       getDb: () => db,
-      save: () => undefined,
       handlers: {},
       staticDir: path.join(root, 'www'),
     });

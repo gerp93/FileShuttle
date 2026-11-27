@@ -1,10 +1,10 @@
 import * as path from 'path';
-import { Database } from 'sql.js';
+import { Database } from './sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir, removeDir } from '../engine/testUtils';
 import { queryAll, run } from './dbHelpers';
 import * as repo from './repository';
-import { initDatabase, saveDatabase } from './schema';
+import { initDatabase } from './schema';
 
 vi.mock('../dbLocation', () => ({ getEffectiveDbPath: () => '' }));
 vi.mock('../startupLog', () => ({ logStartupStep: () => undefined }));
@@ -58,10 +58,9 @@ describe('job catch-up columns', () => {
       scheduleDailyTimes: [],
       mappingIds: [mappingId],
     });
-    db.run('ALTER TABLE jobs DROP COLUMN catch_up');
-    db.run('ALTER TABLE jobs DROP COLUMN last_run_at');
+    db.exec('ALTER TABLE jobs DROP COLUMN catch_up');
+    db.exec('ALTER TABLE jobs DROP COLUMN last_run_at');
     expect(columnsOf(db, 'jobs')).not.toContain('catch_up');
-    saveDatabase(db);
     db.close();
 
     db = await initDatabase(dbPath);
@@ -148,8 +147,7 @@ describe('job daily times', () => {
       scheduleDailyTimes: ['08:15'],
       mappingIds: [],
     });
-    db.run('ALTER TABLE jobs DROP COLUMN schedule_daily_times');
-    saveDatabase(db);
+    db.exec('ALTER TABLE jobs DROP COLUMN schedule_daily_times');
     db.close();
 
     db = await initDatabase(dbPath);
@@ -186,8 +184,7 @@ describe('filter groups', () => {
     const any = repo.createMapping(db, { ...baseInput, name: 'any', filters: [ext('a', 0), ext('b', 0), ext('c', 0)] });
     // Rewind to the previous release's shape: a mode per mapping, no group column.
     run(db, "UPDATE mappings SET filter_match_mode = 'any' WHERE id = ?", [any]);
-    db.run('ALTER TABLE filter_rules DROP COLUMN group_index');
-    saveDatabase(db);
+    db.exec('ALTER TABLE filter_rules DROP COLUMN group_index');
     db.close();
 
     db = await initDatabase(dbPath);
@@ -228,8 +225,7 @@ describe('keep newest per extension', () => {
   it('is added off to a database from before the option existed', async () => {
     db = await initDatabase(dbPath);
     const id = repo.createMapping(db, { ...input, keepNewestPerExtension: false });
-    db.run('ALTER TABLE mappings DROP COLUMN keep_newest_per_extension');
-    saveDatabase(db);
+    db.exec('ALTER TABLE mappings DROP COLUMN keep_newest_per_extension');
     db.close();
 
     db = await initDatabase(dbPath);
@@ -277,8 +273,8 @@ describe('download source filter field', () => {
       ],
     });
     // Put the table back the way the previous release created it: no download_source in the CHECK.
-    db.run('DROP TABLE filter_rules');
-    db.run(`CREATE TABLE filter_rules (
+    db.exec('DROP TABLE filter_rules');
+    db.exec(`CREATE TABLE filter_rules (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       mapping_id   INTEGER NOT NULL REFERENCES mappings(id) ON DELETE CASCADE,
       field        TEXT NOT NULL CHECK (field IN
@@ -288,7 +284,7 @@ describe('download source filter field', () => {
       sort_order   INTEGER NOT NULL DEFAULT 0,
       group_index  INTEGER NOT NULL DEFAULT 0
     )`);
-    db.run(
+    db.exec(
       `INSERT INTO filter_rules (mapping_id, field, operator, value, sort_order, group_index) VALUES
        (${id}, 'extension', 'equals', 'zip', 0, 0), (${id}, 'size', 'min', '100', 1, 1)`
     );
@@ -297,7 +293,6 @@ describe('download source filter field', () => {
         `INSERT INTO filter_rules (mapping_id, field, operator, value) VALUES (${id}, 'download_source', 'matches', 'x.com')`
       )
     ).toThrow();
-    saveDatabase(db);
     db.close();
 
     db = await initDatabase(dbPath);

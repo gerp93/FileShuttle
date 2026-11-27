@@ -1,23 +1,21 @@
-import { Database, SqlValue } from 'sql.js';
+import { Database, SqlValue, toSqlParam } from './sqlite';
 
-export function queryAll(db: Database, sql: string, params: SqlValue[] = []): Record<string, SqlValue>[] {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  const rows: Record<string, SqlValue>[] = [];
-  while (stmt.step()) {
-    rows.push(stmt.getAsObject() as Record<string, SqlValue>);
-  }
-  stmt.free();
-  return rows;
+export type { SqlValue };
+
+type Row = Record<string, string | number | bigint | Uint8Array | null>;
+
+export function queryAll(db: Database, sql: string, params: SqlValue[] = []): Row[] {
+  // node:sqlite rows have a null prototype; spread into plain objects.
+  return db.prepare(sql).all(...params.map(toSqlParam)).map((row) => ({ ...row }));
 }
 
-export function queryOne(db: Database, sql: string, params: SqlValue[] = []): Record<string, SqlValue> | null {
-  const rows = queryAll(db, sql, params);
-  return rows[0] ?? null;
+export function queryOne(db: Database, sql: string, params: SqlValue[] = []): Row | null {
+  const row = db.prepare(sql).get(...params.map(toSqlParam));
+  return row ? { ...row } : null;
 }
 
 export function run(db: Database, sql: string, params: SqlValue[] = []): void {
-  db.run(sql, params);
+  db.prepare(sql).run(...params.map(toSqlParam));
 }
 
 export function lastInsertId(db: Database): number {

@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { Database } from 'sql.js';
+import { Database } from '../database/sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunResult } from '../../shared/types';
 import { run } from '../database/dbHelpers';

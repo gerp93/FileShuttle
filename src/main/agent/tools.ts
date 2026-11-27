@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Database } from 'sql.js';
+import { Database } from '../database/sqlite';
 import {
   ACTION_TYPES,
   CONFLICT_POLICIES,
