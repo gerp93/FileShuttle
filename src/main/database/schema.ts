@@ -1,9 +1,10 @@
-import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getEffectiveDbPath } from '../dbLocation';
 import { logStartupStep } from '../startupLog';
-import { loadWithBackupFallback, saveDatabaseFile } from './dbFile';
+import { copyBeforeFirstNativeOpen, loadWithBackupFallback } from './dbFile';
+import { queryAll, queryOne } from './dbHelpers';
+import { checkpoint, Database, openDatabase, transaction } from './sqlite';
 
 let dbInstance: Database | null = null;
 let currentDbPath: string | null = null;
@@ -94,28 +95,47 @@ const STATEMENTS = [
   )`,
 ];
 
+/** The CREATE statement of a table, or null when it does not exist. */
+function tableSql(db: Database, table: string): string | null {
+  const row = queryOne(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", [table]);
+  return row ? String(row.sql ?? '') : null;
+}
+
+// SQLite can't alter a CHECK in place, so a table is rebuilt: new table, copy, drop, rename.
+// Foreign keys must be off while that happens (dropping a parent would otherwise cascade),
+// and PRAGMA foreign_keys is a no-op inside a transaction, so it is switched around one.
+// The rebuild is atomic: if a statement fails the transaction is never committed.
+function beginRebuild(db: Database): void {
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+}
+
+function endRebuild(db: Database): void {
+  db.exec('COMMIT');
+  db.exec('PRAGMA foreign_keys = ON');
+}
+
 /** Adds the column when it is absent; returns true only when this call added it. */
 function addColumnIfMissing(db: Database, table: string, column: string, ddl: string): boolean {
-  const rows = db.exec(`PRAGMA table_info(${table})`);
+  const rows = queryAll(db, `PRAGMA table_info(${table})`);
   if (!rows.length) return false;
-  const existing = new Set(rows[0].values.map((row) => String(row[1])));
+  const existing = new Set(rows.map((row) => String(row.name)));
   if (existing.has(column)) return false;
-  db.run(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   return true;
 }
 
 function rewriteRunHistoryFilesTable(db: Database, alreadyHasToken: string, outcomeCheck: string): void {
-  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_history_files'");
-  if (!rows.length || !rows[0].values.length) return;
-  const sql = String(rows[0].values[0][0] ?? '');
+  const sql = tableSql(db, 'run_history_files');
+  if (sql === null) return;
   if (sql.includes(alreadyHasToken)) return;
 
   // Older builds (and SQLite's default FK-off mode) could leave file rows
   // whose parent run was deleted. Re-inserting those with FKs on throws
   // and leaves startup stuck on the loading screen.
-  db.run('PRAGMA foreign_keys = OFF');
-  db.run('ALTER TABLE run_history_files RENAME TO run_history_files_old');
-  db.run(`CREATE TABLE run_history_files (
+  beginRebuild(db);
+  db.exec('ALTER TABLE run_history_files RENAME TO run_history_files_old');
+  db.exec(`CREATE TABLE run_history_files (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id          INTEGER NOT NULL REFERENCES run_history(id) ON DELETE CASCADE,
     source_path     TEXT NOT NULL,
@@ -124,13 +144,13 @@ function rewriteRunHistoryFilesTable(db: Database, alreadyHasToken: string, outc
     reason          TEXT,
     file_size_bytes INTEGER
   )`);
-  db.run(
+  db.exec(
     'INSERT INTO run_history_files (id, run_id, source_path, dest_path, outcome, reason, file_size_bytes) ' +
       'SELECT old.id, old.run_id, old.source_path, old.dest_path, old.outcome, old.reason, old.file_size_bytes ' +
       'FROM run_history_files_old old INNER JOIN run_history r ON r.id = old.run_id'
   );
-  db.run('DROP TABLE run_history_files_old');
-  db.run('PRAGMA foreign_keys = ON');
+  db.exec('DROP TABLE run_history_files_old');
+  endRebuild(db);
 }
 
 function widenRunHistoryFilesOutcomeCheck(db: Database): void {
@@ -138,13 +158,12 @@ function widenRunHistoryFilesOutcomeCheck(db: Database): void {
 }
 
 function widenRunHistoryForSystemEvents(db: Database): void {
-  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_history'");
-  if (!rows.length || !rows[0].values.length) return;
-  const sql = String(rows[0].values[0][0] ?? '');
+  const sql = tableSql(db, 'run_history');
+  if (sql === null) return;
   if (sql.includes("'system'")) return;
 
-  db.run('PRAGMA foreign_keys = OFF');
-  db.run(`CREATE TABLE run_history_new (
+  beginRebuild(db);
+  db.exec(`CREATE TABLE run_history_new (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     mapping_id             INTEGER REFERENCES mappings(id) ON DELETE CASCADE,
     mapping_name_snapshot  TEXT NOT NULL,
@@ -163,7 +182,7 @@ function widenRunHistoryForSystemEvents(db: Database): void {
     job_id                 INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
     job_name_snapshot      TEXT
   )`);
-  db.run(`INSERT INTO run_history_new
+  db.exec(`INSERT INTO run_history_new
     (id, mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
      files_moved, files_copied, files_deleted, files_skipped, files_errored,
      status, error_message, undone_by_run_id, triggered_by_run_id, job_id, job_name_snapshot)
@@ -172,19 +191,18 @@ function widenRunHistoryForSystemEvents(db: Database): void {
       files_moved, files_copied, files_deleted, files_skipped, files_errored,
       status, error_message, undone_by_run_id, triggered_by_run_id, job_id, job_name_snapshot
     FROM run_history`);
-  db.run('DROP TABLE run_history');
-  db.run('ALTER TABLE run_history_new RENAME TO run_history');
-  db.run('PRAGMA foreign_keys = ON');
+  db.exec('DROP TABLE run_history');
+  db.exec('ALTER TABLE run_history_new RENAME TO run_history');
+  endRebuild(db);
 }
 
 function widenRunHistoryStatusCheck(db: Database): void {
-  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_history'");
-  if (!rows.length || !rows[0].values.length) return;
-  const sql = String(rows[0].values[0][0] ?? '');
+  const sql = tableSql(db, 'run_history');
+  if (sql === null) return;
   if (sql.includes("'with_skips'")) return;
 
-  db.run('PRAGMA foreign_keys = OFF');
-  db.run(`CREATE TABLE run_history_new (
+  beginRebuild(db);
+  db.exec(`CREATE TABLE run_history_new (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     mapping_id             INTEGER REFERENCES mappings(id) ON DELETE CASCADE,
     mapping_name_snapshot  TEXT NOT NULL,
@@ -203,7 +221,7 @@ function widenRunHistoryStatusCheck(db: Database): void {
     job_id                 INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
     job_name_snapshot      TEXT
   )`);
-  db.run(`INSERT INTO run_history_new
+  db.exec(`INSERT INTO run_history_new
     (id, mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
      files_moved, files_copied, files_deleted, files_skipped, files_errored,
      status, error_message, undone_by_run_id, triggered_by_run_id, job_id, job_name_snapshot)
@@ -212,19 +230,18 @@ function widenRunHistoryStatusCheck(db: Database): void {
       files_moved, files_copied, files_deleted, files_skipped, files_errored,
       status, error_message, undone_by_run_id, triggered_by_run_id, job_id, job_name_snapshot
     FROM run_history`);
-  db.run('DROP TABLE run_history');
-  db.run('ALTER TABLE run_history_new RENAME TO run_history');
-  db.run('PRAGMA foreign_keys = ON');
+  db.exec('DROP TABLE run_history');
+  db.exec('ALTER TABLE run_history_new RENAME TO run_history');
+  endRebuild(db);
 }
 
 function widenMappingsActionTypeCheck(db: Database): void {
-  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='mappings'");
-  if (!rows.length || !rows[0].values.length) return;
-  const sql = String(rows[0].values[0][0] ?? '');
+  const sql = tableSql(db, 'mappings');
+  if (sql === null) return;
   if (sql.includes("'copy'")) return;
 
-  db.run('PRAGMA foreign_keys = OFF');
-  db.run(`CREATE TABLE mappings_new (
+  beginRebuild(db);
+  db.exec(`CREATE TABLE mappings_new (
     id                          INTEGER PRIMARY KEY AUTOINCREMENT,
     name                        TEXT NOT NULL,
     source_path                 TEXT NOT NULL,
@@ -246,7 +263,7 @@ function widenMappingsActionTypeCheck(db: Database): void {
     created_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`);
-  db.run(`INSERT INTO mappings_new
+  db.exec(`INSERT INTO mappings_new
     (id, name, source_path, dest_path, recursive, action_type, conflict_policy,
      filter_match_mode, enabled, schedule_type, schedule_interval_minutes,
      schedule_daily_time, next_mapping_id, created_at, updated_at)
@@ -255,9 +272,9 @@ function widenMappingsActionTypeCheck(db: Database): void {
       filter_match_mode, enabled, schedule_type, schedule_interval_minutes,
       schedule_daily_time, next_mapping_id, created_at, updated_at
     FROM mappings`);
-  db.run('DROP TABLE mappings');
-  db.run('ALTER TABLE mappings_new RENAME TO mappings');
-  db.run('PRAGMA foreign_keys = ON');
+  db.exec('DROP TABLE mappings');
+  db.exec('ALTER TABLE mappings_new RENAME TO mappings');
+  endRebuild(db);
 }
 
 function widenRunHistoryFilesOutcomeCheckForZip(db: Database): void {
@@ -269,13 +286,12 @@ function widenRunHistoryFilesOutcomeCheckForZip(db: Database): void {
 }
 
 function widenMappingsActionTypeCheckForZip(db: Database): void {
-  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='mappings'");
-  if (!rows.length || !rows[0].values.length) return;
-  const sql = String(rows[0].values[0][0] ?? '');
+  const sql = tableSql(db, 'mappings');
+  if (sql === null) return;
   if (sql.includes("'zip'")) return;
 
-  db.run('PRAGMA foreign_keys = OFF');
-  db.run(`CREATE TABLE mappings_new (
+  beginRebuild(db);
+  db.exec(`CREATE TABLE mappings_new (
     id                          INTEGER PRIMARY KEY AUTOINCREMENT,
     name                        TEXT NOT NULL,
     source_path                 TEXT NOT NULL,
@@ -297,7 +313,7 @@ function widenMappingsActionTypeCheckForZip(db: Database): void {
     created_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`);
-  db.run(`INSERT INTO mappings_new
+  db.exec(`INSERT INTO mappings_new
     (id, name, source_path, dest_path, recursive, action_type, conflict_policy,
      filter_match_mode, keep_newest, enabled, schedule_type, schedule_interval_minutes,
      schedule_daily_time, next_mapping_id, created_at, updated_at)
@@ -306,19 +322,18 @@ function widenMappingsActionTypeCheckForZip(db: Database): void {
       filter_match_mode, keep_newest, enabled, schedule_type, schedule_interval_minutes,
       schedule_daily_time, next_mapping_id, created_at, updated_at
     FROM mappings`);
-  db.run('DROP TABLE mappings');
-  db.run('ALTER TABLE mappings_new RENAME TO mappings');
-  db.run('PRAGMA foreign_keys = ON');
+  db.exec('DROP TABLE mappings');
+  db.exec('ALTER TABLE mappings_new RENAME TO mappings');
+  endRebuild(db);
 }
 
 function widenJobsScheduleTypeCheckForWatch(db: Database): void {
-  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'");
-  if (!rows.length || !rows[0].values.length) return;
-  const sql = String(rows[0].values[0][0] ?? '');
+  const sql = tableSql(db, 'jobs');
+  if (sql === null) return;
   if (sql.includes("'watch'")) return;
 
-  db.run('PRAGMA foreign_keys = OFF');
-  db.run(`CREATE TABLE jobs_new (
+  beginRebuild(db);
+  db.exec(`CREATE TABLE jobs_new (
     id                          INTEGER PRIMARY KEY AUTOINCREMENT,
     name                        TEXT NOT NULL,
     enabled                     INTEGER NOT NULL DEFAULT 1,
@@ -329,14 +344,14 @@ function widenJobsScheduleTypeCheckForWatch(db: Database): void {
     created_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`);
-  db.run(`INSERT INTO jobs_new
+  db.exec(`INSERT INTO jobs_new
     (id, name, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time, created_at, updated_at)
     SELECT
       id, name, enabled, schedule_type, schedule_interval_minutes, schedule_daily_time, created_at, updated_at
     FROM jobs`);
-  db.run('DROP TABLE jobs');
-  db.run('ALTER TABLE jobs_new RENAME TO jobs');
-  db.run('PRAGMA foreign_keys = ON');
+  db.exec('DROP TABLE jobs');
+  db.exec('ALTER TABLE jobs_new RENAME TO jobs');
+  endRebuild(db);
 }
 
 /**
@@ -345,13 +360,12 @@ function widenJobsScheduleTypeCheckForWatch(db: Database): void {
  * Every existing rule is copied across unchanged.
  */
 function widenFilterFieldCheckForDownloadSource(db: Database): void {
-  const rows = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='filter_rules'");
-  if (!rows.length || !rows[0].values.length) return;
-  const sql = String(rows[0].values[0][0] ?? '');
+  const sql = tableSql(db, 'filter_rules');
+  if (sql === null) return;
   if (sql.includes("'download_source'")) return;
 
-  db.run('PRAGMA foreign_keys = OFF');
-  db.run(`CREATE TABLE filter_rules_new (
+  beginRebuild(db);
+  db.exec(`CREATE TABLE filter_rules_new (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     mapping_id   INTEGER NOT NULL REFERENCES mappings(id) ON DELETE CASCADE,
     field        TEXT NOT NULL CHECK (field IN
@@ -361,12 +375,12 @@ function widenFilterFieldCheckForDownloadSource(db: Database): void {
     sort_order   INTEGER NOT NULL DEFAULT 0,
     group_index  INTEGER NOT NULL DEFAULT 0
   )`);
-  db.run(`INSERT INTO filter_rules_new (id, mapping_id, field, operator, value, sort_order, group_index)
+  db.exec(`INSERT INTO filter_rules_new (id, mapping_id, field, operator, value, sort_order, group_index)
     SELECT old.id, old.mapping_id, old.field, old.operator, old.value, old.sort_order, old.group_index
     FROM filter_rules old INNER JOIN mappings m ON m.id = old.mapping_id`);
-  db.run('DROP TABLE filter_rules');
-  db.run('ALTER TABLE filter_rules_new RENAME TO filter_rules');
-  db.run('PRAGMA foreign_keys = ON');
+  db.exec('DROP TABLE filter_rules');
+  db.exec('ALTER TABLE filter_rules_new RENAME TO filter_rules');
+  endRebuild(db);
 }
 
 function initSchema(db: Database): void {
@@ -375,10 +389,10 @@ function initSchema(db: Database): void {
     fn();
   };
 
-  db.run('PRAGMA foreign_keys = ON');
+  db.exec('PRAGMA foreign_keys = ON');
   step('CREATE TABLE IF NOT EXISTS', () => {
     for (const statement of STATEMENTS) {
-      db.run(statement);
+      db.exec(statement);
     }
   });
   step('add missing mapping/history columns', () => {
@@ -429,7 +443,7 @@ function initSchema(db: Database): void {
     if (!added) return;
     // Before groups, one per-mapping switch decided AND vs OR for the whole list. Keep what each
     // mapping did: "any" puts every rule in one group, "all" gives every rule a group of its own.
-    db.run(
+    db.exec(
       `UPDATE filter_rules SET group_index = CASE
          WHEN (SELECT filter_match_mode FROM mappings m WHERE m.id = filter_rules.mapping_id) = 'any' THEN 0
          ELSE sort_order
@@ -449,7 +463,7 @@ function initSchema(db: Database): void {
   });
   step('add job daily times column', () => {
     addColumnIfMissing(db, 'jobs', 'schedule_daily_times', 'schedule_daily_times TEXT');
-    db.run(
+    db.exec(
       `UPDATE jobs SET schedule_daily_times = schedule_daily_time
        WHERE schedule_daily_times IS NULL AND schedule_daily_time IS NOT NULL`
     );
@@ -457,47 +471,54 @@ function initSchema(db: Database): void {
 }
 
 export async function initDatabase(dbPath?: string): Promise<Database> {
-  logStartupStep('initDatabase: start, calling initSqlJs()');
-  const SQL = await initSqlJs();
-  logStartupStep('initDatabase: initSqlJs() resolved');
+  logStartupStep('initDatabase: start');
   dbPath = dbPath ?? getEffectiveDbPath();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
+  // Before anything below can change the file (opening in WAL mode and the migrations both do).
+  if (copyBeforeFirstNativeOpen(dbPath)) {
+    logStartupStep('initDatabase: kept a copy of the existing database before first native open');
+  }
+
   logStartupStep(`initDatabase: opening db file at ${dbPath}`);
-  const loaded = loadWithBackupFallback(dbPath, (bytes) => openValidated(SQL, bytes));
+  const loaded = loadWithBackupFallback(dbPath, openValidated);
   const db = loaded.value;
   logStartupStep('initDatabase: database opened');
   recoveryNotice = loaded.recoveredFromBackup
-    ? `FileShuttle's database file was unreadable, so it was restored from the most recent automatic backup. ` +
+    ? `FileShuttle's database file was unreadable, so it was restored from a backup copy. ` +
       `Changes made since that backup may be missing. The damaged file was kept at:\n${loaded.quarantinedTo}`
     : null;
   if (recoveryNotice) logStartupStep(`initDatabase: ${recoveryNotice}`);
 
+  try {
+    logStartupStep('initDatabase: running initSchema()');
+    initSchema(db);
+    logStartupStep('initDatabase: initSchema() done, repairing orphaned rows');
+    repairIntegrity(db);
+  } catch (err) {
+    // An unfinished rebuild transaction is rolled back by closing.
+    db.close();
+    throw err;
+  }
   dbInstance = db;
   currentDbPath = dbPath;
-  logStartupStep('initDatabase: running initSchema()');
-  initSchema(db);
-  logStartupStep('initDatabase: initSchema() done, repairing orphaned rows');
-  repairIntegrity(db);
-  logStartupStep('initDatabase: integrity repair done, calling saveDatabase()');
-  saveDatabase(db, dbPath);
-  logStartupStep('initDatabase: saveDatabase() done, returning');
+  logStartupStep('initDatabase: integrity repair done, returning');
   return db;
 }
 
 /**
- * An empty or non-database file doesn't throw when sql.js opens it -- only
- * when first queried -- so probe it here. A zero-byte file is explicitly
- * rejected: it is what a crash during the old truncate-then-write save left
- * behind, and treating it as "no data yet" would silently discard the backup.
+ * An empty or non-database file doesn't throw when opened -- only when first
+ * queried -- so probe it here. A zero-byte file is explicitly rejected: it is what
+ * a crash during an older truncate-then-write save left behind, and treating it as
+ * "no data yet" would silently discard the backup.
  */
-function openValidated(SQL: SqlJsStatic, bytes: Uint8Array | null): Database {
-  if (!bytes) return new SQL.Database();
-  if (bytes.length === 0) throw new Error('the database file is empty');
-
-  const db = new SQL.Database(bytes);
+function openValidated(dbPath: string): Database {
+  if (fs.existsSync(dbPath) && fs.statSync(dbPath).size === 0) {
+    throw new Error('the database file is empty');
+  }
+  const db = openDatabase(dbPath);
   try {
-    const verdict = String(db.exec('PRAGMA quick_check')[0]?.values[0]?.[0] ?? '');
+    const verdict = String(queryOne(db, 'PRAGMA quick_check')?.quick_check ?? '');
     if (verdict !== 'ok') throw new Error(`integrity check failed: ${verdict}`);
     return db;
   } catch (err) {
@@ -508,38 +529,28 @@ function openValidated(SQL: SqlJsStatic, bytes: Uint8Array | null): Database {
 
 /**
  * Foreign keys were effectively off for the whole session in older builds
- * (see saveDatabase), so deleting a run left its file rows behind, and deleted
+ * (sql.js reset the pragma on every save), so deleting a run left its file rows behind, and deleted
  * mappings/jobs left dangling references. Clear those out once so enforcing
  * foreign keys again can't trip over them -- e.g. an undo of a run whose
  * mapping was deleted would otherwise fail with a constraint error.
  */
 export function repairIntegrity(db: Database): void {
-  db.run('DELETE FROM run_history_files WHERE run_id NOT IN (SELECT id FROM run_history)');
-  db.run('DELETE FROM filter_rules WHERE mapping_id NOT IN (SELECT id FROM mappings)');
-  db.run(
-    'DELETE FROM job_steps WHERE job_id NOT IN (SELECT id FROM jobs) OR mapping_id NOT IN (SELECT id FROM mappings)'
-  );
-  db.run('UPDATE mappings SET next_mapping_id = NULL WHERE next_mapping_id NOT IN (SELECT id FROM mappings)');
-  db.run('UPDATE run_history SET mapping_id = NULL WHERE mapping_id IS NOT NULL AND mapping_id NOT IN (SELECT id FROM mappings)');
-  db.run('UPDATE run_history SET job_id = NULL WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)');
-  db.run(
-    'UPDATE run_history SET undone_by_run_id = NULL WHERE undone_by_run_id IS NOT NULL AND undone_by_run_id NOT IN (SELECT id FROM run_history)'
-  );
-  db.run(
-    'UPDATE run_history SET triggered_by_run_id = NULL WHERE triggered_by_run_id IS NOT NULL AND triggered_by_run_id NOT IN (SELECT id FROM run_history)'
-  );
-}
-
-export function saveDatabase(db: Database, dbPath?: string): void {
-  if (!dbPath) {
-    dbPath = currentDbPath ?? getEffectiveDbPath();
-  }
-  const data = db.export();
-  // sql.js's export() closes and re-opens the database, which silently resets
-  // every pragma -- including foreign_keys back to OFF. Without this, the
-  // schema's ON DELETE CASCADE/SET NULL rules never fire after the first save.
-  db.run('PRAGMA foreign_keys = ON');
-  saveDatabaseFile(dbPath, data);
+  transaction(db, () => {
+    db.exec('DELETE FROM run_history_files WHERE run_id NOT IN (SELECT id FROM run_history)');
+    db.exec('DELETE FROM filter_rules WHERE mapping_id NOT IN (SELECT id FROM mappings)');
+    db.exec(
+      'DELETE FROM job_steps WHERE job_id NOT IN (SELECT id FROM jobs) OR mapping_id NOT IN (SELECT id FROM mappings)'
+    );
+    db.exec('UPDATE mappings SET next_mapping_id = NULL WHERE next_mapping_id NOT IN (SELECT id FROM mappings)');
+    db.exec('UPDATE run_history SET mapping_id = NULL WHERE mapping_id IS NOT NULL AND mapping_id NOT IN (SELECT id FROM mappings)');
+    db.exec('UPDATE run_history SET job_id = NULL WHERE job_id IS NOT NULL AND job_id NOT IN (SELECT id FROM jobs)');
+    db.exec(
+      'UPDATE run_history SET undone_by_run_id = NULL WHERE undone_by_run_id IS NOT NULL AND undone_by_run_id NOT IN (SELECT id FROM run_history)'
+    );
+    db.exec(
+      'UPDATE run_history SET triggered_by_run_id = NULL WHERE triggered_by_run_id IS NOT NULL AND triggered_by_run_id NOT IN (SELECT id FROM run_history)'
+    );
+  });
 }
 
 /** Set when startup had to restore the database from its backup; shown to the user once. */
@@ -555,4 +566,9 @@ export function getDatabase(): Database | null {
 
 export function getCurrentDbPath(): string | null {
   return currentDbPath;
+}
+
+/** Folds the -wal into the main file. Called on quit; harmless if it can't finish. */
+export function flushDatabase(db: Database): void {
+  checkpoint(db);
 }

@@ -1,18 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Database } from 'sql.js';
+import { Database } from '../database/sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as repo from '../database/repository';
-import { initDatabase, saveDatabase } from '../database/schema';
+import { initDatabase } from '../database/schema';
 import { listTree, makeTempDir, removeDir, writeFile } from '../engine/testUtils';
 import { executeAllEnabledJobs, executeJob, JobAlreadyRunningError } from './runService';
 
 vi.mock('../dbLocation', () => ({ getEffectiveDbPath: () => '' }));
 vi.mock('../startupLog', () => ({ logStartupStep: () => undefined }));
-vi.mock('../database/schema', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../database/schema')>();
-  return { ...actual, saveDatabase: vi.fn(actual.saveDatabase) };
-});
 
 let root: string;
 let db: Database;
@@ -20,7 +16,6 @@ let db: Database;
 beforeEach(async () => {
   root = makeTempDir('fileshuttle-run-');
   db = await initDatabase(path.join(root, 'fileshuttle.db'));
-  vi.mocked(saveDatabase).mockClear();
 });
 afterEach(() => {
   db.close();
@@ -74,7 +69,7 @@ describe('executeJob', () => {
     expect(runs).toHaveLength(2);
   });
 
-  it('saves the database after every step, not just at the end', async () => {
+  it('writes each step history row before the next step runs', async () => {
     const a = path.join(root, 'a');
     writeFile(path.join(a, 'file.txt'));
     const jobId = addJob('two-steps', [
@@ -84,8 +79,8 @@ describe('executeJob', () => {
 
     await executeJob(db, jobId, 'manual');
 
-    // One save per step, plus one that stamps the job's last-run time.
-    expect(vi.mocked(saveDatabase)).toHaveBeenCalledTimes(3);
+    expect(repo.listRuns(db, { jobId })).toHaveLength(2);
+    expect(repo.getJob(db, jobId)!.lastRunAt).toBeTruthy();
   });
 
   it('skips disabled steps', async () => {

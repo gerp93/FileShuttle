@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Database } from 'sql.js';
+import type { Database } from '../database/sqlite';
 import { initDatabase } from '../database/schema';
 import { makeTempDir, removeDir } from '../engine/testUtils';
 import { DESKTOP_CHANNELS, HTTP_CHANNELS } from './channels';
@@ -29,10 +29,9 @@ const LEGACY_CHANNELS = [
 const NEW_CHANNELS = ['dialogs:listFolder', 'remote:getSettings', 'remote:setSettings', 'remote:setPassword'];
 
 function makeHandlers(db: Database | null = null) {
-  const save = vi.fn();
   const reloadJobs = vi.fn();
-  const handlers = createHandlers({ getDb: () => db!, save, reloadJobs, getVersion: () => '9.9.9' });
-  return { handlers, save, reloadJobs };
+  const handlers = createHandlers({ getDb: () => db!, reloadJobs, getVersion: () => '9.9.9' });
+  return { handlers, reloadJobs };
 }
 
 describe('handler table', () => {
@@ -81,13 +80,12 @@ describe('handlers over a real database', () => {
   });
 
   it('reads, saves and reloads schedules like the old IPC handlers did', async () => {
-    const { handlers, save, reloadJobs } = makeHandlers(db);
+    const { handlers, reloadJobs } = makeHandlers(db);
     expect(await handlers['mappings:list']()).toEqual([]);
     expect(await handlers['app:getVersion']()).toBe('9.9.9');
     expect(await handlers['settings:getTheme']()).toBe('blue_oval');
 
     await handlers['settings:setTheme']('hacker');
-    expect(save).toHaveBeenCalledTimes(1);
     expect(await handlers['settings:getTheme']()).toBe('hacker');
 
     expect(() => handlers['mappings:create']({})).toThrow();

@@ -1,4 +1,4 @@
-import { Database } from 'sql.js';
+import { Database } from '../database/sqlite';
 import {
   CreateMappingInput,
   FileOutcome,

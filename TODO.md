@@ -34,9 +34,6 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 - Journal each file's outcome as it happens, not when its step finishes, so a
   crash *mid-step* still leaves a history row (and undo) for the files already
   handled. Today a crash loses at most the one in-flight step's record.
-- The database is still written whole on every save (sql.js is in-memory). A
-  native SQLite binding (e.g. better-sqlite3) would make saves incremental and
-  remove the need to hold history in memory.
 - Moves/copies/zips run one file at a time to keep conflict resolution
   deterministic; throughput could be raised by parallelising the safe cases.
 - Run `npm run smoke` in CI (needs a display; currently local only).

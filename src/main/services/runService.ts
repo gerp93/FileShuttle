@@ -1,13 +1,8 @@
-import { Database } from 'sql.js';
+import { Database } from '../database/sqlite';
 import { computeRunStatus, JobRecord, RunProgressEvent, RunResult } from '../../shared/types';
 import * as repo from '../database/repository';
-import { saveDatabase } from '../database/schema';
 import { RunProgress, runMapping } from '../engine/mover';
 import { undoRun } from '../engine/undo';
-
-export function persistDb(db: Database): void {
-  saveDatabase(db);
-}
 
 /** Thrown when a run is requested for a job that is already running (or queued to run). */
 export class JobAlreadyRunningError extends Error {
@@ -86,7 +81,6 @@ export async function executeJob(
       // after the app was closed or the PC asleep. A cancelled run doesn't count.
       if (results.length && !controller.signal.aborted) {
         repo.setJobLastRun(db, jobId, startedAt);
-        persistDb(db);
       }
       const aggregated = aggregateResults(results);
       return controller.signal.aborted ? { ...aggregated, cancelled: true } : aggregated;
@@ -141,10 +135,9 @@ async function runJobSteps(
       jobId: job.id,
       jobNameSnapshot: job.name,
     });
-    // Save after every step, not once at the end: if the app dies between
-    // steps, the files already moved still have a history row (and so can be
-    // undone) instead of vanishing without a trace.
-    persistDb(db);
+    // Each step's history row is written (straight to disk) before the next step starts,
+    // so if the app dies between steps the files already moved still have a history row
+    // (and so can be undone) instead of vanishing without a trace.
     results.push(result);
     triggeredByRunId = runId;
   }
@@ -206,7 +199,6 @@ export function executeUndo(db: Database, runId: number): Promise<RunResult> {
       jobNameSnapshot: originalRun.jobNameSnapshot,
     });
     repo.markRunUndone(db, runId, undoRunId);
-    persistDb(db);
     return result;
   });
 }

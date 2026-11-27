@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Database } from 'sql.js';
+import { Database } from '../database/sqlite';
 import { cleanFolderInput } from '../../shared/pathSafety';
 import { normalizeDailyTimes, validateJobInput } from '../../shared/schedule';
 import { CreateJobInput, CreateMappingInput, FilterRule } from '../../shared/types';

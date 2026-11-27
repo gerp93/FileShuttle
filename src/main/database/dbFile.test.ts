@@ -4,11 +4,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeTempDir, removeDir } from '../engine/testUtils';
 import {
   backupPathFor,
+  copyBeforeFirstNativeOpen,
+  copyDatabaseFile,
   loadWithBackupFallback,
-  refreshBackup,
-  saveDatabaseFile,
-  writeFileAtomic,
+  preNativeCopyPathFor,
 } from './dbFile';
+import { queryAll, run } from './dbHelpers';
+import { openDatabase, transaction } from './sqlite';
 
 let dir: string;
 let dbPath: string;
@@ -19,69 +21,113 @@ beforeEach(() => {
 });
 afterEach(() => removeDir(dir));
 
-const bytes = (text: string) => new TextEncoder().encode(text);
 const read = (p: string) => fs.readFileSync(p, 'utf8');
-/** An `open` that accepts only content starting with "GOOD". */
-const openGood = (b: Uint8Array | null) => {
-  if (!b) return 'fresh';
-  const text = Buffer.from(b).toString('utf8');
+/** An `open` that accepts only files whose content starts with "GOOD". */
+const openGood = (p: string) => {
+  if (!fs.existsSync(p)) return 'fresh';
+  const text = fs.readFileSync(p, 'utf8');
   if (!text.startsWith('GOOD')) throw new Error('not a database');
   return text;
 };
 
-describe('writeFileAtomic', () => {
-  it('creates the file and leaves no temp file behind', () => {
-    writeFileAtomic(dbPath, bytes('one'));
-    expect(read(dbPath)).toBe('one');
-    expect(fs.readdirSync(dir)).toEqual(['fileshuttle.db']);
+describe('copyBeforeFirstNativeOpen', () => {
+  it('does nothing when there is no database', () => {
+    expect(copyBeforeFirstNativeOpen(dbPath)).toBe(false);
+    expect(fs.readdirSync(dir)).toEqual([]);
   });
 
-  it('replaces existing content wholesale', () => {
-    writeFileAtomic(dbPath, bytes('a much longer first version'));
-    writeFileAtomic(dbPath, bytes('short'));
-    expect(read(dbPath)).toBe('short');
+  it('copies the database byte for byte and leaves no temp file', () => {
+    fs.writeFileSync(dbPath, 'GOOD original');
+    expect(copyBeforeFirstNativeOpen(dbPath)).toBe(true);
+    expect(read(preNativeCopyPathFor(dbPath))).toBe('GOOD original');
+    expect(fs.readdirSync(dir).sort()).toEqual(['fileshuttle.db', 'fileshuttle.db.pre-native-sqlite']);
   });
 
-  it('leaves the original intact and cleans up when the replace fails', () => {
-    // Renaming a file over a non-empty directory cannot succeed.
-    fs.mkdirSync(dbPath);
-    fs.writeFileSync(path.join(dbPath, 'keep.txt'), 'keep');
-    expect(() => writeFileAtomic(dbPath, bytes('new'))).toThrow();
-    expect(read(path.join(dbPath, 'keep.txt'))).toBe('keep');
-    expect(fs.existsSync(dbPath + '.tmp')).toBe(false);
+  it('never replaces a copy that already exists', () => {
+    fs.writeFileSync(dbPath, 'GOOD v2');
+    fs.writeFileSync(preNativeCopyPathFor(dbPath), 'GOOD v1');
+    expect(copyBeforeFirstNativeOpen(dbPath)).toBe(false);
+    expect(read(preNativeCopyPathFor(dbPath))).toBe('GOOD v1');
+  });
+
+  it('leaves no half copy under the final name when the copy fails', () => {
+    // A directory where the copy's temp file should go makes the copy fail.
+    fs.writeFileSync(dbPath, 'GOOD original');
+    fs.mkdirSync(preNativeCopyPathFor(dbPath) + '.tmp');
+    expect(() => copyBeforeFirstNativeOpen(dbPath)).toThrow();
+    expect(fs.existsSync(preNativeCopyPathFor(dbPath))).toBe(false);
   });
 });
 
-describe('refreshBackup / saveDatabaseFile', () => {
-  it('does nothing when there is no database yet', () => {
-    expect(refreshBackup(dbPath, 0)).toBe(false);
-    expect(fs.existsSync(backupPathFor(dbPath))).toBe(false);
+describe('copyDatabaseFile (WAL)', () => {
+  function seed() {
+    const db = openDatabase(dbPath);
+    db.exec('CREATE TABLE t (v TEXT)');
+    db.exec("INSERT INTO t VALUES ('old')");
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    // Written after the checkpoint, so it lives only in the -wal sidecar.
+    db.exec("INSERT INTO t VALUES ('just written')");
+    return db;
+  }
+  const values = (p: string) => {
+    const db = openDatabase(p);
+    try {
+      return queryAll(db, 'SELECT v FROM t ORDER BY rowid').map((r) => r.v);
+    } finally {
+      db.close();
+    }
+  };
+
+  it('with the open connection, the copy contains a row written just before it', () => {
+    const db = seed();
+    expect(fs.statSync(dbPath + '-wal').size).toBeGreaterThan(0);
+    const target = path.join(dir, 'moved', 'copy.db');
+    fs.mkdirSync(path.dirname(target));
+    copyDatabaseFile(dbPath, target, db);
+    db.close();
+    expect(values(target)).toEqual(['old', 'just written']);
+    expect(fs.readdirSync(path.dirname(target))).toEqual(['copy.db']);
   });
 
-  it('backs up the previous version before it is overwritten', () => {
-    saveDatabaseFile(dbPath, bytes('GOOD v1'), 0);
-    saveDatabaseFile(dbPath, bytes('GOOD v2'), 0);
-    expect(read(dbPath)).toBe('GOOD v2');
-    expect(read(backupPathFor(dbPath))).toBe('GOOD v1');
+  it('a plain copy of only the main file would have missed that row', () => {
+    const db = seed();
+    const bare = path.join(dir, 'bare.db');
+    fs.copyFileSync(dbPath, bare);
+    db.close();
+    expect(values(bare)).toEqual(['old']);
   });
 
-  it('does not re-copy a backup that is still fresh', () => {
-    saveDatabaseFile(dbPath, bytes('GOOD v1'));
-    saveDatabaseFile(dbPath, bytes('GOOD v2'));
-    saveDatabaseFile(dbPath, bytes('GOOD v3'));
-    // First save has nothing to back up; the second creates the backup of v1;
-    // the third is inside the freshness window so the backup stays at v1.
-    expect(read(backupPathFor(dbPath))).toBe('GOOD v1');
-    expect(read(dbPath)).toBe('GOOD v3');
+  it('without a connection, the -wal sidecar is carried along', () => {
+    const db = seed();
+    const target = path.join(dir, 'copy.db');
+    copyDatabaseFile(dbPath, target, null);
+    db.close();
+    expect(values(target)).toEqual(['old', 'just written']);
   });
+});
 
-  it('refreshes a stale backup', () => {
-    saveDatabaseFile(dbPath, bytes('GOOD v1'), 0);
-    saveDatabaseFile(dbPath, bytes('GOOD v2'), 0);
-    const old = new Date(Date.now() - 60 * 60 * 1000);
-    fs.utimesSync(backupPathFor(dbPath), old, old);
-    saveDatabaseFile(dbPath, bytes('GOOD v3'));
-    expect(read(backupPathFor(dbPath))).toBe('GOOD v2');
+describe('transaction', () => {
+  it('commits on success, rolls back on error, and nests as savepoints', () => {
+    const db = openDatabase(':memory:');
+    db.exec('CREATE TABLE t (v INTEGER)');
+    transaction(db, () => run(db, 'INSERT INTO t VALUES (1)'));
+    expect(() =>
+      transaction(db, () => {
+        run(db, 'INSERT INTO t VALUES (2)');
+        throw new Error('boom');
+      })
+    ).toThrow('boom');
+    transaction(db, () => {
+      run(db, 'INSERT INTO t VALUES (3)');
+      expect(() =>
+        transaction(db, () => {
+          run(db, 'INSERT INTO t VALUES (4)');
+          throw new Error('inner');
+        })
+      ).toThrow('inner');
+    });
+    expect(queryAll(db, 'SELECT v FROM t ORDER BY v').map((r) => r.v)).toEqual([1, 3]);
+    db.close();
   });
 });
 

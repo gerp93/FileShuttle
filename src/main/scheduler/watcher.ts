@@ -1,5 +1,5 @@
 import { FSWatcher, watch } from 'chokidar';
-import { Database } from 'sql.js';
+import { Database } from '../database/sqlite';
 import { JobRecord } from '../../shared/types';
 import { isJobOutputPath, watchTargets, WatchStep } from '../../shared/watchTargets';
 import * as repo from '../database/repository';

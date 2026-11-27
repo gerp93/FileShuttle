@@ -1,4 +1,4 @@
-import { Database } from 'sql.js';
+import { Database, transaction } from './sqlite';
 import {
   CreateJobInput,
   CreateMappingInput,
@@ -88,7 +88,7 @@ export function toMappingConfig(record: MappingRecord): MappingConfig {
   };
 }
 
-export function createMapping(db: Database, input: CreateMappingInput): number {
+function createMappingRows(db: Database, input: CreateMappingInput): number {
   run(
     db,
     `INSERT INTO mappings
@@ -117,7 +117,11 @@ export function createMapping(db: Database, input: CreateMappingInput): number {
   return mappingId;
 }
 
-export function updateMapping(db: Database, mappingId: number, input: UpdateMappingInput): void {
+export function createMapping(db: Database, input: CreateMappingInput): number {
+  return transaction(db, () => createMappingRows(db, input));
+}
+
+function updateMappingRows(db: Database, mappingId: number, input: UpdateMappingInput): void {
   run(
     db,
     `UPDATE mappings SET
@@ -144,6 +148,10 @@ export function updateMapping(db: Database, mappingId: number, input: UpdateMapp
     ]
   );
   replaceFilterRules(db, mappingId, input.filters);
+}
+
+export function updateMapping(db: Database, mappingId: number, input: UpdateMappingInput): void {
+  transaction(db, () => updateMappingRows(db, mappingId, input));
 }
 
 export function cloneMapping(db: Database, mappingId: number, newName: string): number {
@@ -262,7 +270,7 @@ export function buildRunResult(startedAt: Date, finishedAt: Date, fileOutcomes: 
   return result;
 }
 
-export function recordRun(
+function recordRunRows(
   db: Database,
   params: {
     mappingId: number | null;
@@ -313,6 +321,13 @@ export function recordRun(
     );
   });
   return runId;
+}
+
+export function recordRun(
+  db: Database,
+  params: Parameters<typeof recordRunRows>[1]
+): number {
+  return transaction(db, () => recordRunRows(db, params));
 }
 
 export function listRuns(db: Database, filter?: HistoryListFilter | number | null): RunSummary[] {
@@ -447,7 +462,7 @@ function dailyTimeColumns(times: string[]): [string | null, string | null] {
   return normalized.length ? [normalized[0], normalized.join(',')] : [null, null];
 }
 
-export function createJob(db: Database, input: CreateJobInput): number {
+function createJobRows(db: Database, input: CreateJobInput): number {
   run(
     db,
     `INSERT INTO jobs
@@ -467,7 +482,11 @@ export function createJob(db: Database, input: CreateJobInput): number {
   return jobId;
 }
 
-export function updateJob(db: Database, jobId: number, input: UpdateJobInput): void {
+export function createJob(db: Database, input: CreateJobInput): number {
+  return transaction(db, () => createJobRows(db, input));
+}
+
+function updateJobRows(db: Database, jobId: number, input: UpdateJobInput): void {
   run(
     db,
     `UPDATE jobs SET
@@ -485,6 +504,10 @@ export function updateJob(db: Database, jobId: number, input: UpdateJobInput): v
     ]
   );
   replaceJobSteps(db, jobId, input.mappingIds);
+}
+
+export function updateJob(db: Database, jobId: number, input: UpdateJobInput): void {
+  transaction(db, () => updateJobRows(db, jobId, input));
 }
 
 export function setJobLastRun(db: Database, jobId: number, whenIso: string): void {
@@ -553,7 +576,7 @@ export function getJobStats(db: Database, jobId: number): RunStats {
 }
 
 /** Turn existing mapping chains into jobs once, so scheduled work keeps firing. */
-export function migrateChainsToJobs(db: Database): void {
+function migrateChainsToJobsRows(db: Database): void {
   if (getSetting(db, 'jobs_migrated') === '1') return;
 
   const mappings = listMappings(db);
@@ -586,6 +609,10 @@ export function migrateChainsToJobs(db: Database): void {
   }
 
   setSetting(db, 'jobs_migrated', '1');
+}
+
+export function migrateChainsToJobs(db: Database): void {
+  transaction(db, () => migrateChainsToJobsRows(db));
 }
 
 const OVERWRITE_BACKUP_KEY = 'overwrite_backup';

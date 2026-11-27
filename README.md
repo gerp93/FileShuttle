@@ -153,9 +153,12 @@ FileShuttle moves and deletes real files, so it is conservative by default:
   bomb") and archives containing paths that would escape the destination are not
   extracted. The limits are configurable in Settings (default 100,000 entries /
   20 GB).
-- **Crash-safe database.** The database is written to a temp file and renamed
-  into place, with a rolling `.bak`; an unreadable database is quarantined and
-  restored from the backup automatically.
+- **Crash-safe database.** The database is SQLite (`node:sqlite`) in WAL mode:
+  every change is written straight to disk, and multi-step writes are
+  transactions. The first launch of a version using this driver keeps a copy of
+  the existing file as `fileshuttle.db.pre-native-sqlite` beside it (never
+  deleted by the app). An unreadable database is quarantined and, if an older
+  `.bak` exists, restored from it.
 - **One run at a time.** A job can't run twice concurrently, and runs execute
   one after another, so two runs never race over the same files.
 
@@ -216,7 +219,7 @@ npm run smoke       # boots the real Electron main process against a throwaway d
 ```
 
 The tests exercise the engine against real temporary folders, the database layer
-against a real sql.js database, the file watcher against real filesystem events,
+against a real SQLite (`node:sqlite`) database, the file watcher against real filesystem events,
 and (on Windows, outside CI) the Recycle Bin restore against the real bin using
 only files the tests create. CI runs the typechecks and `npm test` on every PR.
 
@@ -232,7 +235,8 @@ npm run package
 - `src/main/` — Electron main process
   - `engine/` — the file engine: `mover.ts` (run), `undo.ts`, `zipStream.ts`
     (streaming zip), `recycleBin.ts` (restore), `filters.ts`
-  - `database/` — sql.js, schema/migrations, crash-safe file writes
+  - `database/` — `node:sqlite` (named only in `sqlite.ts`), schema/migrations,
+    file copies
   - `services/` — running jobs, previews, retention, start-at-login
   - `scheduler/` — interval/daily scheduler and the folder watcher
   - `agent/` — the in-app assistant: `tools.ts` (the only things it can do),

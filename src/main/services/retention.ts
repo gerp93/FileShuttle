@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { Database } from 'sql.js';
+import { Database } from '../database/sqlite';
 import {
   DEFAULT_LOG_RETENTION,
   LOG_RETENTION_PRESETS,
@@ -7,7 +7,6 @@ import {
   PurgeResult,
 } from '../../shared/types';
 import * as repo from '../database/repository';
-import { saveDatabase } from '../database/schema';
 
 const SETTING_KEY = 'log_retention';
 
@@ -25,7 +24,6 @@ export function setLogRetention(db: Database, id: LogRetentionId): void {
     throw new Error(`Unknown log retention setting: ${id}`);
   }
   repo.setSetting(db, SETTING_KEY, id);
-  saveDatabase(db);
 }
 
 function presetFor(id: LogRetentionId) {
@@ -53,7 +51,6 @@ export function applyRetention(db: Database, mode: 'expired' | 'all' = 'expired'
   } else {
     const preset = presetFor(getLogRetention(db));
     if (preset.days == null) {
-      saveDatabase(db);
       return { deletedRuns: 0 };
     }
     deleted = repo.deleteRunsOlderThan(db, cutoffIso(preset.days));
@@ -72,7 +69,6 @@ export function applyRetention(db: Database, mode: 'expired' | 'all' = 'expired'
     });
   }
 
-  saveDatabase(db);
   return { deletedRuns: deleted };
 }
 
