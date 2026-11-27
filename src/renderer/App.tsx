@@ -1,6 +1,7 @@
 import { Component, ReactNode } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
+import AuthGate from './components/AuthGate';
 import Layout from './components/Layout';
 import Jobs from './pages/Jobs';
 import JobEditor from './pages/JobEditor';
@@ -33,25 +34,27 @@ class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Err
 
 function App() {
   return (
-    <ThemeProvider>
-      <Router>
-        <Layout>
-          <RouteErrorBoundary>
-            <Routes>
-              <Route path="/" element={<Jobs />} />
-              <Route path="/jobs/new" element={<JobEditor />} />
-              <Route path="/jobs/:id" element={<JobEditor />} />
-              <Route path="/mappings" element={<Mappings />} />
-              <Route path="/editor" element={<MappingEditor />} />
-              <Route path="/editor/:id" element={<MappingEditor />} />
-              <Route path="/history" element={<History />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </RouteErrorBoundary>
-        </Layout>
-      </Router>
-    </ThemeProvider>
+    <AuthGate>
+      <ThemeProvider>
+        <Router>
+          <Layout>
+            <RouteErrorBoundary>
+              <Routes>
+                <Route path="/" element={<Jobs />} />
+                <Route path="/jobs/new" element={<JobEditor />} />
+                <Route path="/jobs/:id" element={<JobEditor />} />
+                <Route path="/mappings" element={<Mappings />} />
+                <Route path="/editor" element={<MappingEditor />} />
+                <Route path="/editor/:id" element={<MappingEditor />} />
+                <Route path="/history" element={<History />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </RouteErrorBoundary>
+          </Layout>
+        </Router>
+      </ThemeProvider>
+    </AuthGate>
   );
 }
 

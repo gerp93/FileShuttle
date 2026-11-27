@@ -13,6 +13,7 @@ import {
 } from '../../shared/types';
 import { describeUndo, planUndo, summarizeUndoPlan } from '../../shared/undoPlan';
 import { errorMessage } from '../utils/errors';
+import { isWebMode } from '../utils/platform';
 
 type Counts = Pick<
   RunSummary,
@@ -165,28 +166,29 @@ function groupHistory(runs: RunSummary[]): HistoryEntry[] {
 
 function PathLines({ mapping }: { mapping: MappingRecord | undefined }) {
   if (!mapping) return null;
-  return (
-    <div className="history-paths">
+  // "Open in Explorer" opens a window on the PC; it means nothing from the phone, so the paths are plain text there.
+  const web = isWebMode();
+  const line = (label: string, folder: string) =>
+    web ? (
+      <div className="history-path history-path-static">
+        <span className="muted">{label}</span>
+        <span>{folder}</span>
+      </div>
+    ) : (
       <button
         type="button"
         className="history-path"
-        title={`Open ${mapping.sourcePath}`}
-        onClick={() => void window.fileshuttleAPI.shell.openPath(mapping.sourcePath)}
+        title={`Open ${folder}`}
+        onClick={() => void window.fileshuttleAPI.shell.openPath(folder)}
       >
-        <span className="muted">From</span>
-        <span>{mapping.sourcePath}</span>
+        <span className="muted">{label}</span>
+        <span>{folder}</span>
       </button>
-      {mapping.actionType !== 'delete' && (
-        <button
-          type="button"
-          className="history-path"
-          title={`Open ${mapping.destPath}`}
-          onClick={() => void window.fileshuttleAPI.shell.openPath(mapping.destPath)}
-        >
-          <span className="muted">To</span>
-          <span>{mapping.destPath}</span>
-        </button>
-      )}
+    );
+  return (
+    <div className="history-paths">
+      {line('From', mapping.sourcePath)}
+      {mapping.actionType !== 'delete' && line('To', mapping.destPath)}
     </div>
   );
 }

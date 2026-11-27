@@ -6,6 +6,7 @@ import type {
   DbLocationInfo,
   FileOutcome,
   FolderCheck,
+  FolderListing,
   FolderRole,
   HistoryListFilter,
   JobPreview,
@@ -14,6 +15,8 @@ import type {
   LogRetentionId,
   MappingRecord,
   PurgeResult,
+  RemoteSettingsInput,
+  RemoteState,
   RunAllSummary,
   RunResult,
   RunStats,
@@ -79,6 +82,8 @@ interface FileShuttleAPI {
   dialogs: {
     pickFolder: (title: string, startAt?: string) => Promise<string | null>;
     checkFolder: (folder: string, role: FolderRole) => Promise<FolderCheck>;
+    /** Subfolders of a folder (the roots with no path). What the phone's folder browser uses. */
+    listFolder: (folder?: string | null) => Promise<FolderListing>;
   };
   shell: {
     openPath: (filePath: string) => Promise<string>;
@@ -92,6 +97,12 @@ interface FileShuttleAPI {
   };
   app: {
     getVersion: () => Promise<string>;
+  };
+  /** Remote access (open File Shuttle from the phone). Configured on the PC only. */
+  remote: {
+    getSettings: () => Promise<RemoteState>;
+    setSettings: (input: RemoteSettingsInput) => Promise<RemoteState>;
+    setPassword: (password: string) => Promise<RemoteState>;
   };
   updates: {
     check: () => Promise<UpdateCheckResult>;

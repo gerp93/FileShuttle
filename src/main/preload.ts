@@ -6,6 +6,7 @@ import {
   DbLocationInfo,
   FileOutcome,
   FolderCheck,
+  FolderListing,
   FolderRole,
   HistoryListFilter,
   JobPreview,
@@ -14,6 +15,8 @@ import {
   LogRetentionId,
   MappingRecord,
   PurgeResult,
+  RemoteSettingsInput,
+  RemoteState,
   RunAllSummary,
   RunResult,
   RunStats,
@@ -78,6 +81,8 @@ export interface FileShuttleAPI {
   dialogs: {
     pickFolder: (title: string, startAt?: string) => Promise<string | null>;
     checkFolder: (folder: string, role: FolderRole) => Promise<FolderCheck>;
+    /** Subfolders of a folder (the roots with no path). What the phone's folder browser uses. */
+    listFolder: (folder?: string | null) => Promise<FolderListing>;
   };
   shell: {
     openPath: (filePath: string) => Promise<string>;
@@ -91,6 +96,12 @@ export interface FileShuttleAPI {
   };
   app: {
     getVersion: () => Promise<string>;
+  };
+  /** Remote access (open File Shuttle from the phone). Configured on the PC only. */
+  remote: {
+    getSettings: () => Promise<RemoteState>;
+    setSettings: (input: RemoteSettingsInput) => Promise<RemoteState>;
+    setPassword: (password: string) => Promise<RemoteState>;
   };
   updates: {
     check: () => Promise<UpdateCheckResult>;
@@ -169,6 +180,7 @@ const api: FileShuttleAPI = {
   dialogs: {
     pickFolder: (title, startAt) => ipcRenderer.invoke('dialogs:pickFolder', title, startAt),
     checkFolder: (folder, role) => ipcRenderer.invoke('dialogs:checkFolder', folder, role),
+    listFolder: (folder) => ipcRenderer.invoke('dialogs:listFolder', folder),
   },
   shell: {
     openPath: (filePath) => ipcRenderer.invoke('shell:openPath', filePath),
@@ -182,6 +194,11 @@ const api: FileShuttleAPI = {
   },
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
+  },
+  remote: {
+    getSettings: () => ipcRenderer.invoke('remote:getSettings'),
+    setSettings: (input) => ipcRenderer.invoke('remote:setSettings', input),
+    setPassword: (password) => ipcRenderer.invoke('remote:setPassword', password),
   },
   updates: {
     check: () => ipcRenderer.invoke('updates:check'),

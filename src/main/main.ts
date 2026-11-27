@@ -17,37 +17,16 @@ import {
 } from './dbLocation';
 import { logStartupStep, resetStartupLog } from './startupLog';
 import { attachContextMenu, setupApplicationMenu } from './menu';
-import {
-  cancelJob,
-  executeAllEnabledJobs,
-  executeJob,
-  executeUndo,
-  getActiveRuns,
-  setRunProgressListener,
-} from './services/runService';
-import { inputToConfig, previewJob, previewMapping } from './services/previewService';
-import { validateJobInput } from '../shared/schedule';
-import { validateMappingInput } from '../shared/validation';
-import { checkFolder, nearestExistingFolder } from './folderCheck';
-import { applyRetention, getLogRetention, RetentionService, setLogRetention } from './services/retention';
+import { setRunProgressListener } from './services/runService';
+import { nearestExistingFolder } from './folderCheck';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
 import { AgentSession } from './agent/session';
+import { createHandlers } from './api/handlers';
+import { RemoteController } from './remote/controller';
+import { RetentionService } from './services/retention';
 import { SchedulerService } from './scheduler/scheduler';
 import { WatcherService } from './scheduler/watcher';
-import {
-  CreateJobInput,
-  CreateMappingInput,
-  FolderRole,
-  HistoryListFilter,
-  LogRetentionId,
-  RunAllSummary,
-  RunResult,
-  UnzipLimitsSetting,
-  UpdateCheckResult,
-  UpdateJobInput,
-  UpdateMappingInput,
-  validateUnzipLimits,
-} from '../shared/types';
+import { RemoteSettingsInput, RunResult, UpdateCheckResult } from '../shared/types';
 
 pinUserDataPath();
 app.setName('fileshuttle');
@@ -63,6 +42,7 @@ let scheduler: SchedulerService | null = null;
 let watcher: WatcherService | null = null;
 let retention: RetentionService | null = null;
 let agent: AgentSession | null = null;
+let remote: RemoteController | null = null;
 let announcedBackground = false;
 let isQuitting = false;
 // Guards against a real race: if a second launch attempt's 'second-instance'
@@ -391,18 +371,6 @@ function checkForUpdatesNow(): Promise<UpdateCheckResult> {
   });
 }
 
-/** Rejects a mapping that is incomplete, has an unusable filter, or would feed on its own output. */
-function assertValidMapping(input: CreateMappingInput): void {
-  const problem = validateMappingInput(input);
-  if (problem) throw new Error(problem);
-}
-
-/** Rejects a job with no name/steps or an unusable schedule (e.g. a 0-minute interval). */
-function assertValidJob(input: CreateJobInput): void {
-  const problem = validateJobInput(input);
-  if (problem) throw new Error(problem);
-}
-
 /**
  * The in-app assistant. It is created on first use. It can only look at mappings, jobs, history and
  * folder listings, and save mappings/jobs the user approves (jobs always saved switched off); see
@@ -429,6 +397,40 @@ function getAgent(): AgentSession {
 }
 
 function registerIPCHandlers(): void {
+  // Everything that works the same from the window and from the phone lives in one table
+  // (api/handlers.ts); the HTTP server calls the very same functions.
+  const handlers = createHandlers({
+    getDb: () => db!,
+    save: () => saveDatabase(db!),
+    reloadJobs: () => {
+      scheduler?.reloadJobs();
+      watcher?.reloadJobs();
+    },
+    getVersion: () => app.getVersion(),
+  });
+  for (const [channel, handler] of Object.entries(handlers)) {
+    ipcMain.handle(channel, (_event, ...args) => handler(...args));
+  }
+
+  remote = new RemoteController({
+    getDb: () => db!,
+    save: () => saveDatabase(db!),
+    handlers,
+    // Same folder loadAppContent() opens in a packaged build.
+    staticDir: path.join(__dirname, '../../renderer'),
+    log: logStartupStep,
+  });
+
+  // Progress for every run, manual or scheduled, goes to whichever windows are open and to any phone.
+  setRunProgressListener((event) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('run:progress', event);
+    }
+    remote?.broadcast(event);
+  });
+
+  // --- Desktop only: these never go over HTTP (see api/channels.ts) ---
+
   ipcMain.handle('agent:send', (_, text: string) => getAgent().send(String(text ?? '')));
   ipcMain.handle('agent:interrupt', () => getAgent().interrupt());
   ipcMain.handle('agent:reset', () => getAgent().reset());
@@ -439,147 +441,6 @@ function registerIPCHandlers(): void {
   ipcMain.handle('agent:loginCode', (_, code: string) => getAgent().submitLoginCode(String(code ?? '')));
   ipcMain.handle('agent:authStatus', () => getAgent().authStatus());
 
-  ipcMain.handle('mappings:list', () => {
-    return repo.listMappings(db!);
-  });
-
-  ipcMain.handle('mappings:get', (_, id: number) => repo.getMapping(db!, id));
-
-  ipcMain.handle('mappings:create', (_, input: CreateMappingInput) => {
-    assertValidMapping(input);
-    const id = repo.createMapping(db!, input);
-    saveDatabase(db!);
-    scheduler?.reloadJobs();
-    watcher?.reloadJobs();
-    return id;
-  });
-
-  ipcMain.handle('mappings:update', (_, id: number, input: UpdateMappingInput) => {
-    assertValidMapping(input);
-    repo.updateMapping(db!, id, input);
-    saveDatabase(db!);
-    scheduler?.reloadJobs();
-    watcher?.reloadJobs();
-  });
-
-  ipcMain.handle('mappings:delete', (_, id: number) => {
-    repo.deleteMapping(db!, id);
-    saveDatabase(db!);
-    scheduler?.reloadJobs();
-    watcher?.reloadJobs();
-  });
-
-  ipcMain.handle('mappings:clone', (_, id: number, name: string) => {
-    const newId = repo.cloneMapping(db!, id, name);
-    saveDatabase(db!);
-    scheduler?.reloadJobs();
-    watcher?.reloadJobs();
-    return newId;
-  });
-
-  ipcMain.handle('mappings:preview', async (_, id: number) => {
-    const mapping = repo.getMapping(db!, id);
-    if (!mapping) throw new Error(`No mapping with id ${id}`);
-    return previewMapping(repo.toMappingConfig(mapping), { unzipLimits: repo.getUnzipLimits(db!) });
-  });
-
-  // Previews the editor's current, possibly unsaved, form values.
-  ipcMain.handle('mappings:previewInput', async (_, input: CreateMappingInput) => {
-    assertValidMapping(input);
-    return previewMapping(inputToConfig(input), { unzipLimits: repo.getUnzipLimits(db!) });
-  });
-
-  ipcMain.handle('mappings:listJobsUsing', (_, id: number) => repo.listJobsUsingMapping(db!, id));
-
-  ipcMain.handle('mappings:setEnabled', (_, id: number, enabled: boolean) => {
-    repo.setMappingEnabled(db!, id, enabled);
-    saveDatabase(db!);
-    scheduler?.reloadJobs();
-    watcher?.reloadJobs();
-  });
-
-  ipcMain.handle('mappings:getStats', (_, id: number) => repo.getRunStats(db!, id));
-
-  ipcMain.handle('jobs:list', () => repo.listJobs(db!));
-
-  ipcMain.handle('jobs:get', (_, id: number) => repo.getJob(db!, id));
-
-  ipcMain.handle('jobs:create', (_, input: CreateJobInput) => {
-    assertValidJob(input);
-    const id = repo.createJob(db!, input);
-    saveDatabase(db!);
-    scheduler?.reloadJobs();
-    watcher?.reloadJobs();
-    return id;
-  });
-
-  ipcMain.handle('jobs:update', (_, id: number, input: UpdateJobInput) => {
-    assertValidJob(input);
-    repo.updateJob(db!, id, input);
-    saveDatabase(db!);
-    scheduler?.reloadJobs();
-    watcher?.reloadJobs();
-  });
-
-  ipcMain.handle('jobs:delete', (_, id: number) => {
-    repo.deleteJob(db!, id);
-    saveDatabase(db!);
-    scheduler?.reloadJobs();
-    watcher?.reloadJobs();
-  });
-
-  ipcMain.handle('jobs:setEnabled', (_, id: number, enabled: boolean) => {
-    repo.setJobEnabled(db!, id, enabled);
-    saveDatabase(db!);
-    scheduler?.reloadJobs();
-    watcher?.reloadJobs();
-  });
-
-  ipcMain.handle('jobs:getStats', (_, id: number) => repo.getJobStats(db!, id));
-
-  ipcMain.handle('jobs:preview', (_, id: number) => previewJob(db!, id));
-
-  ipcMain.handle('jobs:cancel', (_, id: number) => cancelJob(id));
-
-  ipcMain.handle('jobs:getActive', () => getActiveRuns());
-
-  // Progress for every run, manual or scheduled, goes to whichever windows are open.
-  setRunProgressListener((event) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.webContents.send('run:progress', event);
-    }
-  });
-
-  ipcMain.handle('jobs:run', async (_, id: number): Promise<RunResult> => {
-    return executeJob(db!, id, 'manual');
-  });
-
-  ipcMain.handle('jobs:runAll', async (): Promise<RunAllSummary> => {
-    const results = await executeAllEnabledJobs(db!, 'manual');
-    return {
-      jobCount: results.length,
-      mappingCount: results.reduce((sum, r) => sum + r.fileOutcomes.length, 0),
-      filesMoved: results.reduce((sum, r) => sum + r.filesMoved, 0),
-      filesSkipped: results.reduce((sum, r) => sum + r.filesSkipped, 0),
-      filesErrored: results.reduce((sum, r) => sum + r.filesErrored, 0),
-    };
-  });
-
-  ipcMain.handle('history:list', (_, filter?: HistoryListFilter | number | null) => repo.listRuns(db!, filter));
-
-  ipcMain.handle('history:getDetail', (_, runId: number) => repo.getRunDetail(db!, runId));
-
-  ipcMain.handle('history:undo', async (_, runId: number) => executeUndo(db!, runId));
-
-  ipcMain.handle('history:purgeAll', () => applyRetention(db!, 'all'));
-
-  ipcMain.handle('settings:getTheme', () => repo.getSetting(db!, 'theme', 'blue_oval'));
-
-  ipcMain.handle('settings:setTheme', (_, themeId: string) => {
-    repo.setSetting(db!, 'theme', themeId);
-    saveDatabase(db!);
-  });
-
   ipcMain.handle('settings:getStartup', () => ({
     supported: isStartupSupported,
     enabled: isStartupEnabled(),
@@ -587,29 +448,6 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('settings:setStartup', (_, enabled: boolean) => {
     setStartupEnabled(enabled);
-  });
-
-  ipcMain.handle('settings:getOverwriteBackup', () => repo.getOverwriteBackup(db!));
-
-  ipcMain.handle('settings:setOverwriteBackup', (_, enabled: boolean) => {
-    repo.setOverwriteBackup(db!, enabled);
-    saveDatabase(db!);
-  });
-
-  ipcMain.handle('settings:getUnzipLimits', () => repo.getUnzipLimitsSetting(db!));
-
-  ipcMain.handle('settings:setUnzipLimits', (_, limits: UnzipLimitsSetting) => {
-    const problem = validateUnzipLimits(limits);
-    if (problem) throw new Error(problem);
-    repo.setUnzipLimitsSetting(db!, limits);
-    saveDatabase(db!);
-  });
-
-  ipcMain.handle('settings:getLogRetention', () => getLogRetention(db!));
-
-  ipcMain.handle('settings:setLogRetention', (_, id: LogRetentionId) => {
-    setLogRetention(db!, id);
-    return applyRetention(db!, 'expired');
   });
 
   ipcMain.handle('dialogs:pickFolder', async (_, title: string, startAt?: string) => {
@@ -624,8 +462,6 @@ function registerIPCHandlers(): void {
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
-
-  ipcMain.handle('dialogs:checkFolder', (_, folder: string, role: FolderRole) => checkFolder(folder, role));
 
   ipcMain.handle('shell:openPath', (_, filePath: string) => shell.openPath(filePath));
 
@@ -673,8 +509,14 @@ function registerIPCHandlers(): void {
     return { success: true };
   });
 
-  ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('updates:check', () => checkForUpdatesNow());
+
+  ipcMain.handle('remote:getSettings', () => remote!.state());
+  ipcMain.handle('remote:setSettings', (_, input: RemoteSettingsInput) => remote!.setSettings(input ?? {}));
+  ipcMain.handle('remote:setPassword', (_, password: string) => remote!.setPassword(String(password ?? '')));
+
+  // Off unless the user turned it on in Settings.
+  void remote.apply();
 }
 
 app.whenReady().then(async () => {
@@ -784,6 +626,7 @@ app.on('before-quit', () => {
   watcher?.shutdown();
   retention?.shutdown();
   agent?.dispose();
+  void remote?.shutdown();
   if (db) saveDatabase(db);
 });
 

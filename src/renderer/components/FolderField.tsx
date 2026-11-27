@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { cleanFolderInput } from '../../shared/pathSafety';
 import type { FolderCheck, FolderRole } from '../../shared/types';
+import { isWebMode } from '../utils/platform';
+import FolderBrowserDialog from './FolderBrowserDialog';
 
 interface Props {
   label: string;
@@ -15,6 +17,7 @@ const CHECK_DELAY_MS = 350;
 /** A folder path you can type or paste into, check as you go, or pick with Browse (which opens at the current value). */
 export default function FolderField({ label, value, role, browseTitle, onChange }: Props) {
   const [check, setCheck] = useState<FolderCheck | null>(null);
+  const [browsing, setBrowsing] = useState(false);
 
   useEffect(() => {
     if (!cleanFolderInput(value)) {
@@ -39,6 +42,11 @@ export default function FolderField({ label, value, role, browseTitle, onChange 
   }, [value, role]);
 
   const browse = async () => {
+    // On the phone there is no native dialog: browse the PC's folders in the page instead.
+    if (isWebMode()) {
+      setBrowsing(true);
+      return;
+    }
     const picked = await window.fileshuttleAPI.dialogs.pickFolder(browseTitle, value);
     if (picked) onChange(picked);
   };
@@ -64,6 +72,17 @@ export default function FolderField({ label, value, role, browseTitle, onChange 
         </label>
         <button className="outline" onClick={() => void browse()}>Browse</button>
       </div>
+      {browsing && (
+        <FolderBrowserDialog
+          title={browseTitle}
+          startAt={value}
+          onCancel={() => setBrowsing(false)}
+          onPick={(picked) => {
+            setBrowsing(false);
+            onChange(picked);
+          }}
+        />
+      )}
       {check?.message && (
         <p className={problem ? 'error-text' : 'muted'} style={{ margin: '4px 0 0' }}>{check.message}</p>
       )}

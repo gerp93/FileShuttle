@@ -220,6 +220,56 @@ export interface FolderCheck {
   message: string | null;
 }
 
+/** One entry in a folder listing (folders only). */
+export interface FolderEntry {
+  name: string;
+  path: string;
+}
+
+/**
+ * What the in-page folder browser shows. `path` is null for the list of roots (drive letters,
+ * or `/` and the home folder). `error` is a message, never a throw, so the dialog can show it.
+ */
+export interface FolderListing {
+  path: string | null;
+  /** The folder above `path`; null at a root or in the root list. */
+  parent: string | null;
+  folders: FolderEntry[];
+  /** True when the folder has more subfolders than were returned. */
+  truncated: boolean;
+  error?: string;
+}
+
+/** The Remote access settings as the Settings page shows them (never includes the password). */
+export interface RemoteSettings {
+  enabled: boolean;
+  port: number;
+  hasPassword: boolean;
+  /** Tailscale logins allowed in; empty means no restriction beyond the password. */
+  allowedLogins: string[];
+}
+
+export interface RemoteStatus {
+  listening: boolean;
+  /** e.g. http://127.0.0.1:8765 while listening. */
+  address: string | null;
+  error: string | null;
+}
+
+export interface RemoteState {
+  settings: RemoteSettings;
+  status: RemoteStatus;
+}
+
+export interface RemoteSettingsInput {
+  enabled?: boolean;
+  port?: number;
+  allowedLogins?: string[];
+}
+
+export const DEFAULT_REMOTE_PORT = 8765;
+export const MIN_REMOTE_PASSWORD_LENGTH = 8;
+
 export interface DbLocationInfo {
   path: string;
   isDefault: boolean;

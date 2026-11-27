@@ -6,6 +6,15 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 
 ## Features
 
+- Phone access, next steps (the first phase, "open File Shuttle from the phone",
+  is done: Settings → Remote access, an HTTP server on 127.0.0.1 behind
+  `tailscale serve`, the same UI in the phone's browser). Still to do: split a hub
+  and per-PC workers so the phone can manage jobs on several computers (this phase
+  deliberately left the database schema alone); a web-push or notification path
+  for finished runs; a PWA manifest/icon so it can be added to the home screen;
+  a check on a real phone and a real tailnet (the layout was written for ~390 px
+  but only built and unit-tested here).
+
 - Windows Task Scheduler integration so scheduled mappings can run even
   when the app itself isn't open. Schedules and watchers only fire while the
   app process is running; "catch up" covers gaps but not a closed app that

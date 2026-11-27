@@ -3,6 +3,8 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import logo from '../assets/logo.png';
 import AssistantPanel, { AssistantStatus } from './AssistantPanel';
 import './assistant.css';
+import { isWebMode } from '../utils/platform';
+import { UNAUTHORIZED_EVENT, webLogout } from '../webApi';
 
 const OPEN_KEY = 'fileshuttle-assistant-open';
 
@@ -19,7 +21,9 @@ function readOpen(): boolean {
 const LIST_PAGES = new Set(['/', '/mappings', '/history']);
 
 export default function Layout({ children }: { children?: React.ReactNode }) {
-  const agent = window.fileshuttleAPI?.agent;
+  const web = isWebMode();
+  // The assistant runs Claude on the PC and is desktop only.
+  const agent = web ? undefined : window.fileshuttleAPI?.agent;
   const location = useLocation();
   const [open, setOpen] = useState(readOpen);
   const [status, setStatus] = useState<AssistantStatus>({ running: false, needsApproval: false });
@@ -55,6 +59,17 @@ export default function Layout({ children }: { children?: React.ReactNode }) {
         <NavLink to="/settings" className={({ isActive }) => `nav-button${isActive ? ' active' : ''}`} title="Settings">
           ⚙️
         </NavLink>
+        {web && (
+          <button
+            type="button"
+            className="nav-button nav-signout"
+            title="Sign out"
+            aria-label="Sign out"
+            onClick={() => void webLogout().then(() => window.dispatchEvent(new Event(UNAUTHORIZED_EVENT)))}
+          >
+            🚪
+          </button>
+        )}
         {agent && (
           <button
             type="button"

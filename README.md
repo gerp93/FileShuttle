@@ -57,6 +57,8 @@ come from there rather than being reinvented locally.
 - **Assistant** — a chat panel (the robot button, bottom of the left rail) that
   sets up mappings and jobs from a plain-language description and asks for
   whatever you left out. See [Assistant](#assistant).
+- **Phone access** — open the whole UI from your phone over Tailscale (off by
+  default). See [Open it from your phone](#open-it-from-your-phone).
 - **Theming** — pick any [VisualAssault](https://github.com/gerp93/VisualAssault)
   color theme.
 
@@ -87,6 +89,49 @@ given none of Claude's built-in tools and none of your other Claude connectors.
 
 File and folder *names* it looks at are sent to Claude to answer you; file
 contents never are.
+
+## Open it from your phone
+
+FileShuttle can serve its full UI to your phone's browser over your private
+[Tailscale](https://tailscale.com) network. It is **off by default**.
+
+1. On the PC, open **Settings → Remote access**, set a password (8+ characters)
+   and switch on **Allow access from my phone**. FileShuttle then listens on
+   `127.0.0.1:8765` only (the port is configurable); nothing else on the network
+   can reach it directly.
+2. In a terminal on the PC, publish that port to your tailnet:
+
+   ```
+   tailscale serve --bg 8765
+   ```
+
+   **Never use `tailscale funnel`** — that would put the app on the public
+   internet. `tailscale serve` keeps it inside your tailnet and adds the
+   `Tailscale-User-Login` header the optional allow list below relies on.
+3. On the phone (signed in to the same tailnet), open the address
+   `tailscale serve` prints (`https://<pc-name>.<tailnet>.ts.net`) and sign in
+   with the password.
+
+What you get: jobs, mappings, history, undo and settings, with live progress. Folders are
+picked with an in-page folder browser (it lists the PC's folders). Desktop-only things —
+the assistant, database location, start with Windows, update check and "open in
+Explorer" — are not offered from the phone, and the Remote access settings
+themselves can only be changed on the PC.
+
+How it is protected:
+
+- Listens on `127.0.0.1` only; every `/api` route needs a signed-in session
+  (random id in an `HttpOnly; Secure; SameSite=Strict` cookie, 30 days idle expiry,
+  all sessions dropped when the password changes).
+- The password is stored only as a salted scrypt hash. Five wrong attempts in 15
+  minutes locks sign-in for that client for a while.
+- Optional **Allowed Tailscale logins** (e.g. `someone@gmail.com`): when set, anyone
+  else is refused before the password is even asked for. This trusts the
+  `Tailscale-User-Login` header, which is only trustworthy because the server accepts
+  connections from this PC alone, behind `tailscale serve`.
+- State-changing requests must come from the same origin and carry a custom header
+  (CSRF), the page is served with a strict Content-Security-Policy, and only an
+  explicit list of operations can be called (see `src/main/api/channels.ts`).
 
 ## Safety and undo
 
