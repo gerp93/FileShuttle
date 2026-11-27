@@ -5,7 +5,7 @@ import { RunProgressEvent } from '../../shared/types';
 import * as repo from '../database/repository';
 import { initDatabase } from '../database/schema';
 import { listTree, makeTempDir, removeDir, writeFile } from '../engine/testUtils';
-import { cancelJob, executeJob, getActiveRuns, isJobActive, setRunProgressListener } from './runService';
+import { startTestSystem, TestSystem } from '../worker/testUtils';
 
 vi.mock('../dbLocation', () => ({ getEffectiveDbPath: () => '' }));
 vi.mock('../startupLog', () => ({ logStartupStep: () => undefined }));
@@ -13,15 +13,23 @@ vi.mock('../startupLog', () => ({ logStartupStep: () => undefined }));
 let root: string;
 let db: Database;
 let events: RunProgressEvent[];
+let system: TestSystem;
+const executeJob = (_db: Database, jobId: number, trigger: 'manual' | 'scheduled') => system.hub.runJob(jobId, trigger);
+const cancelJob = (jobId: number) => system.hub.cancelJob(jobId);
+const getActiveRuns = () => system.hub.getActiveRuns();
+const isJobActive = (jobId: number) => system.worker.executor.isJobActive(jobId);
+const setRunProgressListener = (listener: ((e: RunProgressEvent) => void) | null) => system.hub.setProgressListener(listener);
 
 beforeEach(async () => {
   root = makeTempDir('fileshuttle-progress-');
   db = await initDatabase(path.join(root, 'fileshuttle.db'));
+  system = await startTestSystem(db);
   events = [];
   setRunProgressListener((e) => events.push(e));
 });
 afterEach(() => {
   setRunProgressListener(null);
+  system.stop();
   db.close();
   removeDir(root);
 });
@@ -81,9 +89,10 @@ describe('progress events', () => {
   });
 
   it('lists a running job as active, with its latest progress', async () => {
-    const jobId = addJobWithFiles('active', 3);
+    const jobId = addJobWithFiles('active', 200);
     const running = executeJob(db, jobId, 'manual');
 
+    await system.flush(); // the run request reaches the worker, its first progress reaches the hub
     expect(isJobActive(jobId)).toBe(true);
     expect(getActiveRuns().map((e) => e.jobId)).toEqual([jobId]);
 
@@ -91,9 +100,24 @@ describe('progress events', () => {
     expect(getActiveRuns()).toEqual([]);
   });
 
-  it('still emits a finished event when the run fails', async () => {
+  it('leaves nothing active when the run is refused because the job is gone', async () => {
     const jobId = addJobWithFiles('doomed', 1);
     repo.deleteJob(db, jobId);
+    events.length = 0;
+
+    // The hub knows the job is gone and never bothers the worker.
+    await expect(executeJob(db, jobId, 'manual')).rejects.toThrow(/No job/);
+
+    expect(events).toEqual([]);
+    expect(getActiveRuns()).toEqual([]);
+  });
+
+  it('still reports finished when the worker fails the run itself', async () => {
+    const jobId = addJobWithFiles('stale', 1);
+    await system.hub.syncSchedules();
+    await system.flush();
+    // Remove the job behind the hub's back so the worker, holding the old schedule, is asked for it.
+    system.worker.executor['deps'].getJob = () => null;
     events.length = 0;
 
     await expect(executeJob(db, jobId, 'manual')).rejects.toThrow(/No job/);
@@ -108,7 +132,7 @@ describe('cancelJob', () => {
     const jobId = addJobWithFiles('queued', 5);
     const running = executeJob(db, jobId, 'manual');
 
-    expect(cancelJob(jobId)).toBe(true);
+    await expect(cancelJob(jobId)).resolves.toBe(true);
     const result = await running;
 
     expect(result.cancelled).toBe(true);
@@ -121,7 +145,7 @@ describe('cancelJob', () => {
     // Cancel as soon as the first step reports it is processing.
     setRunProgressListener((e) => {
       events.push(e);
-      if (e.phase === 'processing') cancelJob(jobId);
+      if (e.phase === 'processing') void cancelJob(jobId);
     });
 
     const result = await executeJob(db, jobId, 'manual');
@@ -133,14 +157,16 @@ describe('cancelJob', () => {
     expect(repo.listRuns(db, { jobId })).toHaveLength(1);
   });
 
-  it('returns false for a job that is not running', () => {
-    expect(cancelJob(424242)).toBe(false);
+  it('returns false for a job that is not running', async () => {
+    await expect(cancelJob(424242)).resolves.toBe(false);
+    const idle = addJobWithFiles('idle', 1);
+    await expect(cancelJob(idle)).resolves.toBe(false);
   });
 
   it('a cancelled job can be run again afterwards', async () => {
     const jobId = addJobWithFiles('rerun', 4);
     const first = executeJob(db, jobId, 'manual');
-    cancelJob(jobId);
+    void cancelJob(jobId);
     await first;
 
     const second = await executeJob(db, jobId, 'manual');

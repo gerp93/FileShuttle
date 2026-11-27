@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunResult } from '../../shared/types';
 import * as repo from '../database/repository';
 import { initDatabase } from '../database/schema';
+import { startTestSystem, TestSystem } from '../worker/testUtils';
+import type { JobSource } from '../worker/jobSource';
 import { listTree, makeTempDir, removeDir, writeFile } from '../engine/testUtils';
 import { WatcherService } from './watcher';
 
@@ -15,18 +17,26 @@ const SLOW = 30_000;
 
 let root: string;
 let db: Database;
+let system: TestSystem;
+// The jobs come straight from the test's database; runs go through the hub to the in-process worker.
+const source: JobSource = {
+  listEnabledJobs: () => repo.listJobs(db, true),
+  runJob: (jobId, trigger) => system.hub.runJob(jobId, trigger),
+};
 let watcher: WatcherService;
 let completed: { jobId: number; result: RunResult }[];
 
 beforeEach(async () => {
   root = makeTempDir('fileshuttle-watch-');
   db = await initDatabase(path.join(root, 'fileshuttle.db'));
+  system = await startTestSystem(db);
   completed = [];
-  watcher = new WatcherService(db, (jobId, result) => completed.push({ jobId, result }));
+  watcher = new WatcherService(source, (jobId, result) => completed.push({ jobId, result }));
 });
 afterEach(async () => {
   watcher.shutdown();
   await new Promise((r) => setTimeout(r, 100)); // let chokidar release its handles before deleting the folder
+  system.stop();
   db.close();
   removeDir(root);
 });

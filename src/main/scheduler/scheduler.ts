@@ -1,9 +1,8 @@
 import cron from 'node-cron';
-import { Database } from '../database/sqlite';
 import { isJobOverdue } from '../../shared/schedule';
 import { JobRecord } from '../../shared/types';
-import * as repo from '../database/repository';
-import { executeJob, JobAlreadyRunningError } from '../services/runService';
+import { JobAlreadyRunningError } from '../worker/runExecutor';
+import type { JobSource } from '../worker/jobSource';
 
 type ScheduledRunCallback = (jobId: number, result: import('../../shared/types').RunResult) => void;
 
@@ -17,7 +16,7 @@ export class SchedulerService {
   private onScheduledRunComplete?: ScheduledRunCallback;
 
   constructor(
-    private db: Database,
+    private source: JobSource,
     onScheduledRunComplete?: ScheduledRunCallback
   ) {
     this.onScheduledRunComplete = onScheduledRunComplete;
@@ -37,7 +36,7 @@ export class SchedulerService {
 
   reloadJobs(): void {
     this.shutdown();
-    for (const record of repo.listJobs(this.db, true)) {
+    for (const record of this.source.listEnabledJobs()) {
       if (record.scheduleType === 'manual') continue;
       const job = this.buildJob(record);
       if (job) this.jobs.set(record.id, job);
@@ -52,7 +51,7 @@ export class SchedulerService {
    */
   catchUp(now: Date = new Date()): number {
     let started = 0;
-    for (const record of repo.listJobs(this.db, true)) {
+    for (const record of this.source.listEnabledJobs()) {
       if (record.catchUp && isJobOverdue(record, now)) {
         this.runScheduled(record.id);
         started += 1;
@@ -85,7 +84,7 @@ export class SchedulerService {
   private runScheduled(jobId: number): void {
     void (async () => {
       try {
-        const result = await executeJob(this.db, jobId, 'scheduled');
+        const result = await this.source.runJob(jobId, 'scheduled');
         this.onScheduledRunComplete?.(jobId, result);
       } catch (err) {
         if (err instanceof JobAlreadyRunningError) {

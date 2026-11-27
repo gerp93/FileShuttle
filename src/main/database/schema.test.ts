@@ -32,8 +32,8 @@ const count = (d: Database, table: string) => Number(queryOne(d, `SELECT COUNT(*
 function seedRun(d: Database): number {
   run(
     d,
-    `INSERT INTO run_history (mapping_name_snapshot, trigger_type, started_at, finished_at, status)
-     VALUES ('m', 'manual', '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', 'success')`
+    `INSERT INTO run_history (mapping_name_snapshot, trigger_type, started_at, finished_at, status, worker_id, run_uid)
+     VALUES ('m', 'manual', '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', 'success', (SELECT id FROM workers LIMIT 1), lower(hex(randomblob(8))))`
   );
   const runId = Number(queryOne(d, 'SELECT last_insert_rowid() AS id')?.id);
   run(d, "INSERT INTO run_history_files (run_id, source_path, outcome) VALUES (?, '/a', 'moved')", [runId]);
@@ -92,8 +92,8 @@ describe('repairIntegrity', () => {
     run(db, 'INSERT INTO job_steps (job_id, mapping_id) VALUES (999, 999)');
     run(
       db,
-      `INSERT INTO run_history (mapping_id, job_id, mapping_name_snapshot, trigger_type, started_at, finished_at, status)
-       VALUES (999, 888, 'gone', 'manual', '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', 'success')`
+      `INSERT INTO run_history (mapping_id, job_id, mapping_name_snapshot, trigger_type, started_at, finished_at, status, worker_id, run_uid)
+       VALUES (999, 888, 'gone', 'manual', '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', 'success', (SELECT id FROM workers LIMIT 1), lower(hex(randomblob(8))))`
     );
 
     repairIntegrity(db);
@@ -111,16 +111,16 @@ describe('repairIntegrity', () => {
     db.exec('PRAGMA foreign_keys = OFF');
     run(
       db,
-      `INSERT INTO run_history (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at, status)
-       VALUES (999, 'gone', 'manual', '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', 'success')`
+      `INSERT INTO run_history (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at, status, worker_id, run_uid)
+       VALUES (999, 'gone', 'manual', '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', 'success', (SELECT id FROM workers LIMIT 1), lower(hex(randomblob(8))))`
     );
     repairIntegrity(db);
     db.exec('PRAGMA foreign_keys = ON');
     expect(() =>
       run(
         db!,
-        `INSERT INTO run_history (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at, status)
-         VALUES ((SELECT mapping_id FROM run_history LIMIT 1), 'undo', 'undo', '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', 'success')`
+        `INSERT INTO run_history (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at, status, worker_id, run_uid)
+         VALUES ((SELECT mapping_id FROM run_history LIMIT 1), 'undo', 'undo', '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', 'success', (SELECT id FROM workers LIMIT 1), lower(hex(randomblob(8))))`
       )
     ).not.toThrow();
   });

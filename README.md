@@ -159,6 +159,15 @@ FileShuttle moves and deletes real files, so it is conservative by default:
   the existing file as `fileshuttle.db.pre-native-sqlite` beside it (never
   deleted by the app). An unreadable database is quarantined and, if an older
   `.bak` exists, restored from it.
+- **Hub and worker, in one process.** Inside the app, a *hub* (database, window,
+  phone page) talks to a *worker* (scheduler, folder watchers, file mover) with
+  JSON messages (`src/shared/workerProtocol.ts`) over an in-process link; nothing
+  looks different from outside. Every mapping, job and run belongs to a worker
+  (the `local` one, named after this computer), each run has a `run_uid` so a
+  report delivered twice is stored once, and a worker's `schedule_version` goes
+  up whenever its schedule changes. The first launch of this version keeps a copy
+  of the database as `fileshuttle.db.pre-workers` (never overwritten or deleted by
+  the app).
 - **One run at a time.** A job can't run twice concurrently, and runs execute
   one after another, so two runs never race over the same files.
 
@@ -237,8 +246,11 @@ npm run package
     (streaming zip), `recycleBin.ts` (restore), `filters.ts`
   - `database/` — `node:sqlite` (named only in `sqlite.ts`), schema/migrations,
     file copies
-  - `services/` — running jobs, previews, retention, start-at-login
-  - `scheduler/` — interval/daily scheduler and the folder watcher
+  - `services/` — previews, retention, start-at-login
+  - `hub/` — the hub: worker registry, schedule sync, command dispatch, run history writes
+  - `worker/` — the worker: run executor, runtime, and the in-process transport
+  - `settings/` — app settings split into hub settings and run settings
+  - `scheduler/` — interval/daily scheduler and the folder watcher (worker side)
   - `agent/` — the in-app assistant: `tools.ts` (the only things it can do),
     `actions.ts` (what saving is allowed to change), `session.ts` (approvals),
     `prompt.ts`

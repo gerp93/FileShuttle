@@ -72,6 +72,8 @@ export interface RunResult {
 
 export interface MappingRecord {
   id: number;
+  /** The worker (machine) whose folders this mapping works on. */
+  workerId: string;
   name: string;
   sourcePath: string;
   destPath: string;
@@ -169,6 +171,10 @@ export function mappingInUseMessage(mappingName: string, jobNames: string[]): st
 
 export interface RunSummary {
   id: number;
+  /** The worker that ran it. */
+  workerId: string;
+  /** Made by that worker when the run started; the same run reported twice is stored once. */
+  runUid: string;
   mappingId: number | null;
   mappingNameSnapshot: string;
   jobId: number | null;
@@ -297,6 +303,8 @@ export interface RunAllSummary {
 
 export interface JobRecord {
   id: number;
+  /** The worker that runs this job. */
+  workerId: string;
   name: string;
   enabled: boolean;
   scheduleType: ScheduleType;
