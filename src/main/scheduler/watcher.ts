@@ -1,9 +1,8 @@
 import { FSWatcher, watch } from 'chokidar';
-import { Database } from '../database/sqlite';
 import { JobRecord } from '../../shared/types';
 import { isJobOutputPath, watchTargets, WatchStep } from '../../shared/watchTargets';
-import * as repo from '../database/repository';
-import { executeJob, JobAlreadyRunningError } from '../services/runService';
+import { JobAlreadyRunningError } from '../worker/runExecutor';
+import type { JobSource } from '../worker/jobSource';
 
 type WatchedRunCallback = (jobId: number, result: import('../../shared/types').RunResult) => void;
 
@@ -33,7 +32,7 @@ export class WatcherService {
   private onWatchedRunComplete?: WatchedRunCallback;
 
   constructor(
-    private db: Database,
+    private source: JobSource,
     onWatchedRunComplete?: WatchedRunCallback
   ) {
     this.onWatchedRunComplete = onWatchedRunComplete;
@@ -54,7 +53,7 @@ export class WatcherService {
 
   reloadJobs(): void {
     this.shutdown();
-    for (const job of repo.listJobs(this.db, true)) {
+    for (const job of this.source.listEnabledJobs()) {
       if (job.scheduleType !== 'watch') continue;
       const group = this.buildWatchers(job);
       if (group.length) this.watchers.set(job.id, group);
@@ -68,7 +67,7 @@ export class WatcherService {
    */
   catchUp(): number {
     let started = 0;
-    for (const job of repo.listJobs(this.db, true)) {
+    for (const job of this.source.listEnabledJobs()) {
       if (job.scheduleType === 'watch' && job.catchUp) {
         this.scheduleRun(job.id);
         started += 1;
@@ -111,7 +110,7 @@ export class WatcherService {
   private runWatched(jobId: number): void {
     void (async () => {
       try {
-        const result = await executeJob(this.db, jobId, 'scheduled');
+        const result = await this.source.runJob(jobId, 'scheduled');
         this.onWatchedRunComplete?.(jobId, result);
       } catch (err) {
         if (err instanceof JobAlreadyRunningError) {

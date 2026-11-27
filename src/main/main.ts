@@ -17,15 +17,16 @@ import {
 } from './dbLocation';
 import { logStartupStep, resetStartupLog } from './startupLog';
 import { attachContextMenu, setupApplicationMenu } from './menu';
-import { setRunProgressListener } from './services/runService';
 import { nearestExistingFolder } from './folderCheck';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
 import { AgentSession } from './agent/session';
 import { createHandlers } from './api/handlers';
 import { RemoteController } from './remote/controller';
 import { RetentionService } from './services/retention';
-import { SchedulerService } from './scheduler/scheduler';
-import { WatcherService } from './scheduler/watcher';
+import { Hub } from './hub/hub';
+import { InProcessSystem, startInProcessWorker } from './worker/inProcess';
+import { runSettings } from './settings/appSettings';
+import { getLocalWorkerId } from './database/workers';
 import { RemoteSettingsInput, RunResult, UpdateCheckResult } from '../shared/types';
 
 pinUserDataPath();
@@ -38,8 +39,10 @@ app.setAppUserModelId('com.fileshuttle.app');
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let db: Database | null = null;
-let scheduler: SchedulerService | null = null;
-let watcher: WatcherService | null = null;
+// The hub owns the database side (history, schedules, commands); the worker owns the scheduler, the
+// folder watchers and the mover. Both live in this process for now, linked by an in-process transport.
+let hub: Hub | null = null;
+let workerSystem: InProcessSystem | null = null;
 let retention: RetentionService | null = null;
 let agent: AgentSession | null = null;
 let remote: RemoteController | null = null;
@@ -290,8 +293,7 @@ function createTray(): void {
         label: 'Quit',
         click: () => {
           isQuitting = true;
-          scheduler?.shutdown();
-          watcher?.shutdown();
+          workerSystem?.stop();
           retention?.shutdown();
           app.quit();
         },
@@ -384,10 +386,7 @@ function getAgent(): AgentSession {
       },
       {
         getDb: () => db!,
-        afterChange: () => {
-          scheduler?.reloadJobs();
-          watcher?.reloadJobs();
-        },
+        afterChange: () => hub?.syncSchedules(),
       },
       path.join(app.getPath('userData'), 'assistant')
     );
@@ -400,10 +399,8 @@ function registerIPCHandlers(): void {
   // (api/handlers.ts); the HTTP server calls the very same functions.
   const handlers = createHandlers({
     getDb: () => db!,
-    reloadJobs: () => {
-      scheduler?.reloadJobs();
-      watcher?.reloadJobs();
-    },
+    hub: hub!,
+    reloadJobs: () => hub?.syncSchedules(),
     getVersion: () => app.getVersion(),
   });
   for (const [channel, handler] of Object.entries(handlers)) {
@@ -419,7 +416,7 @@ function registerIPCHandlers(): void {
   });
 
   // Progress for every run, manual or scheduled, goes to whichever windows are open and to any phone.
-  setRunProgressListener((event) => {
+  hub!.setProgressListener((event) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('run:progress', event);
     }
@@ -567,11 +564,8 @@ app.whenReady().then(async () => {
     retention.start();
     logStep('main: retention started, constructing scheduler');
 
-    scheduler = new SchedulerService(db, (jobId, result) => notifyRunFinished('scheduled', jobId, result));
-    logStep('main: scheduler constructed, constructing watcher');
-
-    watcher = new WatcherService(db, (jobId, result) => notifyRunFinished('watched folder', jobId, result));
-    logStep('main: watcher constructed, registering IPC handlers');
+    hub = new Hub({ getDb: () => db! });
+    logStep('main: hub constructed, registering IPC handlers');
 
     registerIPCHandlers();
     logStep('main: IPC handlers registered, loading app content');
@@ -580,19 +574,22 @@ app.whenReady().then(async () => {
     appInitialized = true;
     logStep('main: startup complete');
     announceDatabaseRecovery();
-    scheduler.start();
-    watcher.start();
-    // The app wasn't running while any schedule that fired since it last ran.
-    scheduler.catchUp();
-    watcher.catchUp();
+    // The local worker says hello and is sent its schedule; applying the first one starts the
+    // scheduler and the watchers and catches up on anything that fired while the app wasn't running.
+    const database = db;
+    workerSystem = startInProcessWorker(hub, {
+      workerId: getLocalWorkerId(database),
+      appVersion: app.getVersion(),
+      readRunSettings: () => runSettings.read(database),
+      onBackgroundRunFinished: (kind, jobId, result) => notifyRunFinished(kind, jobId, result),
+      heartbeat: true,
+    });
     setupAutoUpdater();
 
     // Timers are unreliable across sleep, and files may have landed while the PC
     // was asleep: rebuild the schedules and pick up anything that was missed.
     powerMonitor.on('resume', () => {
-      scheduler?.reloadJobs();
-      scheduler?.catchUp();
-      watcher?.catchUp();
+      workerSystem?.worker.resumeFromSleep();
     });
 
     app.on('activate', () => {
@@ -615,8 +612,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
-  scheduler?.shutdown();
-  watcher?.shutdown();
+  workerSystem?.stop();
   retention?.shutdown();
   agent?.dispose();
   void remote?.shutdown();

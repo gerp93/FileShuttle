@@ -1,17 +1,10 @@
 import type { Database } from '../database/sqlite';
 import * as repo from '../database/repository';
-import {
-  cancelJob,
-  executeAllEnabledJobs,
-  executeJob,
-  executeUndo,
-  getActiveRuns,
-} from '../services/runService';
-import { inputToConfig, previewJob, previewMapping } from '../services/previewService';
+import type { Hub } from '../hub/hub';
+import { inputToConfig } from '../services/previewService';
+import { hubSettings, runSettings } from '../settings/appSettings';
 import { validateJobInput } from '../../shared/schedule';
 import { validateMappingInput } from '../../shared/validation';
-import { checkFolder } from '../folderCheck';
-import { listFolder } from '../folderBrowse';
 import { applyRetention, getLogRetention, setLogRetention } from '../services/retention';
 import {
   CreateJobInput,
@@ -20,7 +13,6 @@ import {
   HistoryListFilter,
   LogRetentionId,
   RunAllSummary,
-  RunResult,
   UnzipLimitsSetting,
   UpdateJobInput,
   UpdateMappingInput,
@@ -34,6 +26,8 @@ export type HandlerMap = Record<string, Handler>;
 
 export interface HandlerDeps {
   getDb: () => Database;
+  /** Everything that touches folders or runs files goes through the hub, which asks a worker. */
+  hub: Hub;
   /** Rebuilds schedules and folder watchers after a mapping or job changed. */
   reloadJobs: () => void;
   getVersion: () => string;
@@ -93,13 +87,13 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
     'mappings:preview': async (id: number) => {
       const mapping = repo.getMapping(db(), id);
       if (!mapping) throw new Error(`No mapping with id ${id}`);
-      return previewMapping(repo.toMappingConfig(mapping), { unzipLimits: repo.getUnzipLimits(db()) });
+      return deps.hub.previewMapping(repo.toMappingConfig(mapping), mapping.workerId);
     },
 
     // Previews the editor's current, possibly unsaved, form values.
     'mappings:previewInput': async (input: CreateMappingInput) => {
       assertValidMapping(input);
-      return previewMapping(inputToConfig(input), { unzipLimits: repo.getUnzipLimits(db()) });
+      return deps.hub.previewMapping(inputToConfig(input));
     },
 
     'mappings:listJobsUsing': (id: number) => repo.listJobsUsingMapping(db(), id),
@@ -140,51 +134,42 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
 
     'jobs:getStats': (id: number) => repo.getJobStats(db(), id),
 
-    'jobs:preview': (id: number) => previewJob(db(), id),
+    'jobs:preview': (id: number) => deps.hub.previewJob(id),
 
-    'jobs:cancel': (id: number) => cancelJob(id),
+    'jobs:cancel': (id: number) => deps.hub.cancelJob(id),
 
-    'jobs:getActive': () => getActiveRuns(),
+    'jobs:getActive': () => deps.hub.getActiveRuns(),
 
-    'jobs:run': async (id: number): Promise<RunResult> => executeJob(db(), id, 'manual'),
+    'jobs:run': async (id: number) => deps.hub.runJob(id, 'manual'),
 
-    'jobs:runAll': async (): Promise<RunAllSummary> => {
-      const results = await executeAllEnabledJobs(db(), 'manual');
-      return {
-        jobCount: results.length,
-        mappingCount: results.reduce((sum, r) => sum + r.fileOutcomes.length, 0),
-        filesMoved: results.reduce((sum, r) => sum + r.filesMoved, 0),
-        filesSkipped: results.reduce((sum, r) => sum + r.filesSkipped, 0),
-        filesErrored: results.reduce((sum, r) => sum + r.filesErrored, 0),
-      };
-    },
+    'jobs:runAll': async (): Promise<RunAllSummary> => deps.hub.runAll(),
 
     'history:list': (filter?: HistoryListFilter | number | null) => repo.listRuns(db(), filter),
 
     'history:getDetail': (runId: number) => repo.getRunDetail(db(), runId),
 
-    'history:undo': async (runId: number) => executeUndo(db(), runId),
+    'history:undo': async (runId: number) => deps.hub.undo(runId),
 
     'history:purgeAll': () => applyRetention(db(), 'all'),
 
-    'settings:getTheme': () => repo.getSetting(db(), 'theme', 'blue_oval'),
+    'settings:getTheme': () => hubSettings.getTheme(db()),
 
     'settings:setTheme': (themeId: string) => {
-      repo.setSetting(db(), 'theme', themeId);
+      hubSettings.setTheme(db(), themeId);
     },
 
-    'settings:getOverwriteBackup': () => repo.getOverwriteBackup(db()),
+    'settings:getOverwriteBackup': () => runSettings.getOverwriteBackup(db()),
 
     'settings:setOverwriteBackup': (enabled: boolean) => {
-      repo.setOverwriteBackup(db(), enabled);
+      runSettings.setOverwriteBackup(db(), enabled);
     },
 
-    'settings:getUnzipLimits': () => repo.getUnzipLimitsSetting(db()),
+    'settings:getUnzipLimits': () => runSettings.getUnzipLimitsSetting(db()),
 
     'settings:setUnzipLimits': (limits: UnzipLimitsSetting) => {
       const problem = validateUnzipLimits(limits);
       if (problem) throw new Error(problem);
-      repo.setUnzipLimitsSetting(db(), limits);
+      runSettings.setUnzipLimitsSetting(db(), limits);
     },
 
     'settings:getLogRetention': () => getLogRetention(db()),
@@ -194,10 +179,10 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
       return applyRetention(db(), 'expired');
     },
 
-    'dialogs:checkFolder': (folder: string, role: FolderRole) => checkFolder(folder, role),
+    'dialogs:checkFolder': (folder: string, role: FolderRole) => deps.hub.checkFolder(folder, role),
 
     // The phone has no native folder picker; the page browses with this instead.
-    'dialogs:listFolder': (folder?: string | null) => listFolder(folder),
+    'dialogs:listFolder': (folder?: string | null) => deps.hub.listFolder(folder),
 
     'app:getVersion': () => deps.getVersion(),
   };

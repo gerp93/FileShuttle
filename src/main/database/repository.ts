@@ -1,8 +1,8 @@
+import { randomUUID } from 'crypto';
 import { Database, transaction } from './sqlite';
 import {
   CreateJobInput,
   CreateMappingInput,
-  DEFAULT_UNZIP_LIMITS_SETTING,
   FileOutcome,
   FilterRule,
   HistoryListFilter,
@@ -14,13 +14,12 @@ import {
   RunStats,
   RunSummary,
   UpdateJobInput,
-  UnzipLimitsSetting,
   UpdateMappingInput,
-  validateUnzipLimits,
 } from '../../shared/types';
 import { normalizeFilterGroups } from '../../shared/filterGroups';
 import { normalizeDailyTimes } from '../../shared/schedule';
 import { lastInsertId, queryAll, queryOne, run, toBool, toInt } from './dbHelpers';
+import { bumpScheduleVersion, getLocalWorkerId, ownerOf } from './workers';
 
 function rowToFilterRule(row: Record<string, unknown>): FilterRule {
   return {
@@ -43,6 +42,7 @@ function rowToRecord(db: Database, row: Record<string, unknown>): MappingRecord 
   const id = Number(row.id);
   return {
     id,
+    workerId: String(row.worker_id),
     name: String(row.name),
     sourcePath: String(row.source_path),
     destPath: String(row.dest_path),
@@ -88,14 +88,20 @@ export function toMappingConfig(record: MappingRecord): MappingConfig {
   };
 }
 
-function createMappingRows(db: Database, input: CreateMappingInput): number {
+/** Raises the schedule version of the worker that owns this mapping or job (no-op when it is gone). */
+function bumpOwner(db: Database, table: 'mappings' | 'jobs', id: number): void {
+  const workerId = ownerOf(db, table, id);
+  if (workerId) bumpScheduleVersion(db, workerId);
+}
+
+function createMappingRows(db: Database, input: CreateMappingInput, workerId: string): number {
   run(
     db,
     `INSERT INTO mappings
       (name, source_path, dest_path, recursive, action_type, conflict_policy,
        keep_newest, keep_newest_per_extension, enabled, schedule_type, schedule_interval_minutes,
-       schedule_daily_time, next_mapping_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       schedule_daily_time, next_mapping_id, worker_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.sourcePath,
@@ -110,6 +116,7 @@ function createMappingRows(db: Database, input: CreateMappingInput): number {
       input.scheduleIntervalMinutes,
       input.scheduleDailyTime,
       input.nextMappingId,
+      workerId,
     ]
   );
   const mappingId = lastInsertId(db);
@@ -117,8 +124,14 @@ function createMappingRows(db: Database, input: CreateMappingInput): number {
   return mappingId;
 }
 
-export function createMapping(db: Database, input: CreateMappingInput): number {
-  return transaction(db, () => createMappingRows(db, input));
+/** Creates a mapping on the given worker (this PC's `local` worker when none is named). */
+export function createMapping(db: Database, input: CreateMappingInput, workerId?: string): number {
+  return transaction(db, () => {
+    const owner = workerId ?? getLocalWorkerId(db);
+    const id = createMappingRows(db, input, owner);
+    bumpScheduleVersion(db, owner);
+    return id;
+  });
 }
 
 function updateMappingRows(db: Database, mappingId: number, input: UpdateMappingInput): void {
@@ -151,7 +164,10 @@ function updateMappingRows(db: Database, mappingId: number, input: UpdateMapping
 }
 
 export function updateMapping(db: Database, mappingId: number, input: UpdateMappingInput): void {
-  transaction(db, () => updateMappingRows(db, mappingId, input));
+  transaction(db, () => {
+    updateMappingRows(db, mappingId, input);
+    bumpOwner(db, 'mappings', mappingId);
+  });
 }
 
 export function cloneMapping(db: Database, mappingId: number, newName: string): number {
@@ -159,7 +175,9 @@ export function cloneMapping(db: Database, mappingId: number, newName: string): 
   if (!source) {
     throw new Error(`Mapping #${mappingId} not found`);
   }
-  return createMapping(db, {
+  return createMapping(
+    db,
+    {
     name: newName,
     sourcePath: source.sourcePath,
     destPath: source.destPath,
@@ -174,7 +192,9 @@ export function cloneMapping(db: Database, mappingId: number, newName: string): 
     actionType: source.actionType,
     keepNewest: source.keepNewest,
     keepNewestPerExtension: source.keepNewestPerExtension,
-  });
+    },
+    source.workerId
+  );
 }
 
 export function listJobsUsingMapping(db: Database, mappingId: number): { id: number; name: string }[] {
@@ -196,15 +216,21 @@ export function deleteMapping(db: Database, mappingId: number): void {
     const name = mapping?.name ?? `Mapping #${mappingId}`;
     throw new Error(mappingInUseMessage(name, jobs.map((job) => job.name)));
   }
-  run(db, 'DELETE FROM mappings WHERE id = ?', [mappingId]);
+  transaction(db, () => {
+    bumpOwner(db, 'mappings', mappingId);
+    run(db, 'DELETE FROM mappings WHERE id = ?', [mappingId]);
+  });
 }
 
 export function setMappingEnabled(db: Database, mappingId: number, enabled: boolean): void {
-  run(
-    db,
-    "UPDATE mappings SET enabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
-    [enabled ? 1 : 0, mappingId]
-  );
+  transaction(db, () => {
+    run(
+      db,
+      "UPDATE mappings SET enabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+      [enabled ? 1 : 0, mappingId]
+    );
+    bumpOwner(db, 'mappings', mappingId);
+  });
 }
 
 export function getMapping(db: Database, mappingId: number): MappingRecord | null {
@@ -212,16 +238,17 @@ export function getMapping(db: Database, mappingId: number): MappingRecord | nul
   return row ? rowToRecord(db, row) : null;
 }
 
-export function listMappings(db: Database, enabledOnly = false): MappingRecord[] {
-  const sql = enabledOnly
-    ? 'SELECT * FROM mappings WHERE enabled = 1 ORDER BY name COLLATE NOCASE'
-    : 'SELECT * FROM mappings ORDER BY name COLLATE NOCASE';
-  return queryAll(db, sql).map((row) => rowToRecord(db, row));
+export function listMappings(db: Database, enabledOnly = false, workerId?: string): MappingRecord[] {
+  const where = [enabledOnly ? 'enabled = 1' : null, workerId ? 'worker_id = ?' : null].filter(Boolean);
+  const sql = `SELECT * FROM mappings${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY name COLLATE NOCASE`;
+  return queryAll(db, sql, workerId ? [workerId] : []).map((row) => rowToRecord(db, row));
 }
 
 function rowToRunSummary(row: Record<string, unknown>): RunSummary {
   return {
     id: Number(row.id),
+    workerId: String(row.worker_id),
+    runUid: String(row.run_uid),
     mappingId: toInt(row.mapping_id),
     mappingNameSnapshot: String(row.mapping_name_snapshot),
     jobId: toInt(row.job_id),
@@ -270,27 +297,44 @@ export function buildRunResult(startedAt: Date, finishedAt: Date, fileOutcomes: 
   return result;
 }
 
-function recordRunRows(
-  db: Database,
-  params: {
-    mappingId: number | null;
-    mappingNameSnapshot: string;
-    triggerType: RunSummary['triggerType'];
-    result: RunResult;
-    status: RunSummary['status'];
-    errorMessage?: string | null;
-    triggeredByRunId?: number | null;
-    jobId?: number | null;
-    jobNameSnapshot?: string | null;
-  }
-): number {
+export interface RecordRunParams {
+  mappingId: number | null;
+  mappingNameSnapshot: string;
+  triggerType: RunSummary['triggerType'];
+  result: RunResult;
+  status: RunSummary['status'];
+  errorMessage?: string | null;
+  triggeredByRunId?: number | null;
+  jobId?: number | null;
+  jobNameSnapshot?: string | null;
+  /** Who ran it. Defaults to this PC's `local` worker. */
+  workerId?: string;
+  /**
+   * Made by whoever runs the job (the worker), so a report that arrives twice is stored once.
+   * Generated here for runs the hub itself makes (log purges).
+   */
+  runUid?: string;
+}
+
+/** The history id of the run with this uid, or null. */
+export function getRunIdByUid(db: Database, runUid: string): number | null {
+  const row = queryOne(db, 'SELECT id FROM run_history WHERE run_uid = ?', [runUid]);
+  return row ? Number(row.id) : null;
+}
+
+function recordRunRows(db: Database, params: RecordRunParams): { runId: number; duplicate: boolean } {
+  const runUid = params.runUid ?? randomUUID();
+  // A report that is delivered twice (a resend after a lost acknowledgement) is stored once:
+  // the second copy is ignored, and its file rows are not inserted again.
+  const existing = getRunIdByUid(db, runUid);
+  if (existing != null) return { runId: existing, duplicate: true };
   run(
     db,
     `INSERT INTO run_history
       (mapping_id, mapping_name_snapshot, trigger_type, started_at, finished_at,
        files_moved, files_copied, files_deleted, files_skipped, files_errored, files_extracted, files_zipped,
-       status, error_message, triggered_by_run_id, job_id, job_name_snapshot)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       status, error_message, triggered_by_run_id, job_id, job_name_snapshot, worker_id, run_uid)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       params.mappingId,
       params.mappingNameSnapshot,
@@ -309,6 +353,8 @@ function recordRunRows(
       params.triggeredByRunId ?? null,
       params.jobId ?? null,
       params.jobNameSnapshot ?? null,
+      params.workerId ?? getLocalWorkerId(db),
+      runUid,
     ]
   );
   const runId = lastInsertId(db);
@@ -320,13 +366,15 @@ function recordRunRows(
       [runId, file.sourcePath, file.destPath, file.outcome, file.reason, file.sizeBytes]
     );
   });
-  return runId;
+  return { runId, duplicate: false };
 }
 
-export function recordRun(
-  db: Database,
-  params: Parameters<typeof recordRunRows>[1]
-): number {
+export function recordRun(db: Database, params: RecordRunParams): number {
+  return transaction(db, () => recordRunRows(db, params).runId);
+}
+
+/** Like recordRun, but says whether the report was a repeat of one already stored. */
+export function recordRunOnce(db: Database, params: RecordRunParams): { runId: number; duplicate: boolean } {
   return transaction(db, () => recordRunRows(db, params));
 }
 
@@ -436,6 +484,7 @@ function rowToJob(db: Database, row: Record<string, unknown>): JobRecord {
   const id = Number(row.id);
   return {
     id,
+    workerId: String(row.worker_id),
     name: String(row.name),
     enabled: toBool(row.enabled),
     scheduleType: String(row.schedule_type) as JobRecord['scheduleType'],
@@ -449,7 +498,14 @@ function rowToJob(db: Database, row: Record<string, unknown>): JobRecord {
   };
 }
 
-function replaceJobSteps(db: Database, jobId: number, mappingIds: number[]): void {
+function replaceJobSteps(db: Database, jobId: number, mappingIds: number[], workerId: string): void {
+  // A job runs on one machine, so every step must be a mapping of that same worker.
+  for (const mappingId of mappingIds) {
+    const owner = ownerOf(db, 'mappings', mappingId);
+    if (owner != null && owner !== workerId) {
+      throw new Error('A job can only use mappings that belong to the same worker as the job.');
+    }
+  }
   run(db, 'DELETE FROM job_steps WHERE job_id = ?', [jobId]);
   mappingIds.forEach((mappingId, index) => {
     run(db, 'INSERT INTO job_steps (job_id, mapping_id, sort_order) VALUES (?, ?, ?)', [jobId, mappingId, index]);
@@ -462,12 +518,13 @@ function dailyTimeColumns(times: string[]): [string | null, string | null] {
   return normalized.length ? [normalized[0], normalized.join(',')] : [null, null];
 }
 
-function createJobRows(db: Database, input: CreateJobInput): number {
+function createJobRows(db: Database, input: CreateJobInput, workerId: string): number {
   run(
     db,
     `INSERT INTO jobs
-      (name, enabled, catch_up, schedule_type, schedule_interval_minutes, schedule_daily_time, schedule_daily_times)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      (name, enabled, catch_up, schedule_type, schedule_interval_minutes, schedule_daily_time, schedule_daily_times,
+       worker_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.enabled ? 1 : 0,
@@ -475,15 +532,22 @@ function createJobRows(db: Database, input: CreateJobInput): number {
       input.scheduleType,
       input.scheduleIntervalMinutes,
       ...dailyTimeColumns(input.scheduleDailyTimes),
+      workerId,
     ]
   );
   const jobId = lastInsertId(db);
-  replaceJobSteps(db, jobId, input.mappingIds);
+  replaceJobSteps(db, jobId, input.mappingIds, workerId);
   return jobId;
 }
 
-export function createJob(db: Database, input: CreateJobInput): number {
-  return transaction(db, () => createJobRows(db, input));
+/** Creates a job on the given worker (this PC's `local` worker when none is named). */
+export function createJob(db: Database, input: CreateJobInput, workerId?: string): number {
+  return transaction(db, () => {
+    const owner = workerId ?? getLocalWorkerId(db);
+    const id = createJobRows(db, input, owner);
+    bumpScheduleVersion(db, owner);
+    return id;
+  });
 }
 
 function updateJobRows(db: Database, jobId: number, input: UpdateJobInput): void {
@@ -503,27 +567,41 @@ function updateJobRows(db: Database, jobId: number, input: UpdateJobInput): void
       jobId,
     ]
   );
-  replaceJobSteps(db, jobId, input.mappingIds);
+  const owner = ownerOf(db, 'jobs', jobId);
+  if (owner) replaceJobSteps(db, jobId, input.mappingIds, owner);
 }
 
 export function updateJob(db: Database, jobId: number, input: UpdateJobInput): void {
-  transaction(db, () => updateJobRows(db, jobId, input));
+  transaction(db, () => {
+    updateJobRows(db, jobId, input);
+    bumpOwner(db, 'jobs', jobId);
+  });
 }
 
+/**
+ * Records when a job last ran in full. Deliberately does NOT raise the worker's schedule version:
+ * it is run state the worker produced itself, and resending the schedule would reset its timers.
+ */
 export function setJobLastRun(db: Database, jobId: number, whenIso: string): void {
   run(db, 'UPDATE jobs SET last_run_at = ? WHERE id = ?', [whenIso, jobId]);
 }
 
 export function deleteJob(db: Database, jobId: number): void {
-  run(db, 'DELETE FROM jobs WHERE id = ?', [jobId]);
+  transaction(db, () => {
+    bumpOwner(db, 'jobs', jobId);
+    run(db, 'DELETE FROM jobs WHERE id = ?', [jobId]);
+  });
 }
 
 export function setJobEnabled(db: Database, jobId: number, enabled: boolean): void {
-  run(
-    db,
-    "UPDATE jobs SET enabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
-    [enabled ? 1 : 0, jobId]
-  );
+  transaction(db, () => {
+    run(
+      db,
+      "UPDATE jobs SET enabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+      [enabled ? 1 : 0, jobId]
+    );
+    bumpOwner(db, 'jobs', jobId);
+  });
 }
 
 export function getJob(db: Database, jobId: number): JobRecord | null {
@@ -531,11 +609,10 @@ export function getJob(db: Database, jobId: number): JobRecord | null {
   return row ? rowToJob(db, row) : null;
 }
 
-export function listJobs(db: Database, enabledOnly = false): JobRecord[] {
-  const sql = enabledOnly
-    ? 'SELECT * FROM jobs WHERE enabled = 1 ORDER BY name COLLATE NOCASE'
-    : 'SELECT * FROM jobs ORDER BY name COLLATE NOCASE';
-  return queryAll(db, sql).map((row) => rowToJob(db, row));
+export function listJobs(db: Database, enabledOnly = false, workerId?: string): JobRecord[] {
+  const where = [enabledOnly ? 'enabled = 1' : null, workerId ? 'worker_id = ?' : null].filter(Boolean);
+  const sql = `SELECT * FROM jobs${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY name COLLATE NOCASE`;
+  return queryAll(db, sql, workerId ? [workerId] : []).map((row) => rowToJob(db, row));
 }
 
 export function getJobStats(db: Database, jobId: number): RunStats {
@@ -605,7 +682,7 @@ function migrateChainsToJobsRows(db: Database): void {
       scheduleIntervalMinutes: mapping.scheduleIntervalMinutes,
       scheduleDailyTimes: mapping.scheduleDailyTime ? [mapping.scheduleDailyTime] : [],
       mappingIds,
-    });
+    }, mapping.workerId);
   }
 
   setSetting(db, 'jobs_migrated', '1');
@@ -613,41 +690,4 @@ function migrateChainsToJobsRows(db: Database): void {
 
 export function migrateChainsToJobs(db: Database): void {
   transaction(db, () => migrateChainsToJobsRows(db));
-}
-
-const OVERWRITE_BACKUP_KEY = 'overwrite_backup';
-
-/** Whether files replaced by an "overwrite" mapping are first sent to the Recycle Bin. On unless turned off. */
-export function getOverwriteBackup(db: Database): boolean {
-  return getSetting(db, OVERWRITE_BACKUP_KEY, '1') !== '0';
-}
-
-export function setOverwriteBackup(db: Database, enabled: boolean): void {
-  setSetting(db, OVERWRITE_BACKUP_KEY, enabled ? '1' : '0');
-}
-
-const UNZIP_MAX_ENTRIES_KEY = 'unzip_max_entries';
-const UNZIP_MAX_GB_KEY = 'unzip_max_total_gb';
-
-export function getUnzipLimitsSetting(db: Database): UnzipLimitsSetting {
-  const entries = Number(getSetting(db, UNZIP_MAX_ENTRIES_KEY, null));
-  const gb = Number(getSetting(db, UNZIP_MAX_GB_KEY, null));
-  const stored: UnzipLimitsSetting = {
-    maxEntries: entries || DEFAULT_UNZIP_LIMITS_SETTING.maxEntries,
-    maxTotalGB: gb || DEFAULT_UNZIP_LIMITS_SETTING.maxTotalGB,
-  };
-  return validateUnzipLimits(stored) ? DEFAULT_UNZIP_LIMITS_SETTING : stored;
-}
-
-export function setUnzipLimitsSetting(db: Database, limits: UnzipLimitsSetting): void {
-  const problem = validateUnzipLimits(limits);
-  if (problem) throw new Error(problem);
-  setSetting(db, UNZIP_MAX_ENTRIES_KEY, String(limits.maxEntries));
-  setSetting(db, UNZIP_MAX_GB_KEY, String(limits.maxTotalGB));
-}
-
-/** The settings form of the limits, in the units the engine uses. */
-export function getUnzipLimits(db: Database): { maxEntries: number; maxTotalBytes: number } {
-  const { maxEntries, maxTotalGB } = getUnzipLimitsSetting(db);
-  return { maxEntries, maxTotalBytes: Math.floor(maxTotalGB * 1024 ** 3) };
 }

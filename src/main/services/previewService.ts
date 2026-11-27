@@ -8,6 +8,7 @@ import {
   StepPreview,
 } from '../../shared/types';
 import * as repo from '../database/repository';
+import { runSettings } from '../settings/appSettings';
 import { runMapping, UnzipLimits } from '../engine/mover';
 
 const ACTIONABLE: ReadonlySet<FileOutcome['outcome']> = new Set(['moved', 'copied', 'deleted', 'zipped', 'extracted']);
@@ -53,7 +54,10 @@ export function inputToConfig(input: CreateMappingInput, id = 0): MappingConfig 
 }
 
 /**
- * Previews every enabled step against the folders as they are right now.
+ * Previews every enabled step against the folders as they are right now, in this process.
+ * Only the assistant's tools call this directly; the window and the phone go through the hub
+ * (Hub.previewJob), which asks the job's worker.
+ *
  * Steps after the first are shown the same way, so a step that consumes the
  * output of an earlier step will look emptier here than it will on a real run.
  */
@@ -63,7 +67,7 @@ export async function previewJob(db: Database, jobId: number): Promise<JobPrevie
   const steps: StepPreview[] = [];
   for (const mapping of job.steps) {
     if (!mapping.enabled) continue;
-    steps.push(await previewMapping(repo.toMappingConfig(mapping), { unzipLimits: repo.getUnzipLimits(db) }));
+    steps.push(await previewMapping(repo.toMappingConfig(mapping), { unzipLimits: runSettings.read(db).unzipLimits }));
   }
   return { jobId: job.id, jobName: job.name, steps };
 }

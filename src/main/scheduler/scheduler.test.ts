@@ -5,6 +5,8 @@ import { RunResult } from '../../shared/types';
 import { run } from '../database/dbHelpers';
 import * as repo from '../database/repository';
 import { initDatabase } from '../database/schema';
+import { startTestSystem, TestSystem } from '../worker/testUtils';
+import type { JobSource } from '../worker/jobSource';
 import { listTree, makeTempDir, removeDir, writeFile } from '../engine/testUtils';
 import { SchedulerService } from './scheduler';
 
@@ -13,17 +15,25 @@ vi.mock('../startupLog', () => ({ logStartupStep: () => undefined }));
 
 let root: string;
 let db: Database;
+let system: TestSystem;
+// The jobs come straight from the test's database; runs go through the hub to the in-process worker.
+const source: JobSource = {
+  listEnabledJobs: () => repo.listJobs(db, true),
+  runJob: (jobId, trigger) => system.hub.runJob(jobId, trigger),
+};
 let scheduler: SchedulerService;
 let completed: { jobId: number; result: RunResult }[];
 
 beforeEach(async () => {
   root = makeTempDir('fileshuttle-sched-');
   db = await initDatabase(path.join(root, 'fileshuttle.db'));
+  system = await startTestSystem(db);
   completed = [];
-  scheduler = new SchedulerService(db, (jobId, result) => completed.push({ jobId, result }));
+  scheduler = new SchedulerService(source, (jobId, result) => completed.push({ jobId, result }));
 });
 afterEach(() => {
   scheduler.shutdown();
+  system.stop();
   db.close();
   removeDir(root);
 });

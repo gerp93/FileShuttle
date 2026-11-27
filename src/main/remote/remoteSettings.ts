@@ -1,5 +1,6 @@
 import type { Database } from '../database/sqlite';
 import * as repo from '../database/repository';
+import { HUB_SETTING_KEYS } from '../settings/appSettings';
 import {
   DEFAULT_REMOTE_PORT,
   RemoteSettings,
@@ -7,10 +8,10 @@ import {
 } from '../../shared/types';
 import { hashPassword, validatePassword, verifyPassword } from './password';
 
-const ENABLED_KEY = 'remote_enabled';
-const PORT_KEY = 'remote_port';
-const HASH_KEY = 'remote_password_hash';
-const LOGINS_KEY = 'remote_allowed_logins';
+const ENABLED_KEY = HUB_SETTING_KEYS.remoteEnabled;
+const PORT_KEY = HUB_SETTING_KEYS.remotePort;
+const HASH_KEY = HUB_SETTING_KEYS.remotePasswordHash;
+const LOGINS_KEY = HUB_SETTING_KEYS.remoteAllowedLogins;
 
 /** Splits a comma- or newline-separated list, trims, drops blanks and repeats (case-insensitive). */
 export function parseLogins(text: string): string[] {

@@ -21,6 +21,13 @@ export const BACKUP_SUFFIX = '.bak';
 const TMP_SUFFIX = '.tmp';
 const RENAME_RETRIES = 5;
 
+/** The copy made before the workers migration first changes the database. */
+export const PRE_WORKERS_SUFFIX = '.pre-workers';
+
+export function preWorkersCopyPathFor(dbPath: string): string {
+  return dbPath + PRE_WORKERS_SUFFIX;
+}
+
 export function preNativeCopyPathFor(dbPath: string): string {
   return dbPath + PRE_NATIVE_SUFFIX;
 }
@@ -109,6 +116,20 @@ export function copyDatabaseFile(from: string, to: string, db?: Database | null)
     copyFileAtomic(wal, to + '-wal');
   }
   copyFileAtomic(from, to);
+}
+
+/**
+ * Makes `<db>.pre-workers` from the open database, for the one-time move to the hub/worker
+ * data model. Never overwrites an existing copy and never deletes one. It goes through a temp
+ * name and a rename (via `copyDatabaseFile`), so a crash never leaves a half copy under the
+ * final name, and VACUUM INTO includes anything still in the -wal. Returns true when made.
+ */
+export function copyBeforeWorkersMigration(dbPath: string, db: Database): boolean {
+  if (!fs.existsSync(dbPath)) return false;
+  const copyPath = preWorkersCopyPathFor(dbPath);
+  if (fs.existsSync(copyPath)) return false;
+  copyDatabaseFile(dbPath, copyPath, db);
+  return true;
 }
 
 export interface LoadResult<T> {

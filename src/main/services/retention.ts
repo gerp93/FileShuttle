@@ -7,8 +7,9 @@ import {
   PurgeResult,
 } from '../../shared/types';
 import * as repo from '../database/repository';
+import { HUB_SETTING_KEYS } from '../settings/appSettings';
 
-const SETTING_KEY = 'log_retention';
+const SETTING_KEY = HUB_SETTING_KEYS.logRetention;
 
 export function isLogRetentionId(value: string | null | undefined): value is LogRetentionId {
   return LOG_RETENTION_PRESETS.some((preset) => preset.id === value);

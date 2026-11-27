@@ -5,19 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as repo from '../database/repository';
 import { initDatabase } from '../database/schema';
 import { listTree, makeTempDir, removeDir, writeFile } from '../engine/testUtils';
-import { executeAllEnabledJobs, executeJob, JobAlreadyRunningError } from './runService';
+import { startTestSystem, TestSystem } from '../worker/testUtils';
+import { JobAlreadyRunningError } from '../worker/runExecutor';
+import { runSettings } from '../settings/appSettings';
 
 vi.mock('../dbLocation', () => ({ getEffectiveDbPath: () => '' }));
 vi.mock('../startupLog', () => ({ logStartupStep: () => undefined }));
 
 let root: string;
 let db: Database;
+let system: TestSystem;
+const executeJob = (_db: Database, jobId: number, trigger: 'manual' | 'scheduled') => system.hub.runJob(jobId, trigger);
+const executeAllEnabledJobs = (_db: Database, trigger: 'manual' | 'scheduled') => system.hub.runAllEnabled(trigger);
 
 beforeEach(async () => {
   root = makeTempDir('fileshuttle-run-');
   db = await initDatabase(path.join(root, 'fileshuttle.db'));
+  system = await startTestSystem(db);
 });
 afterEach(() => {
+  system.stop();
   db.close();
   removeDir(root);
 });
@@ -135,14 +142,14 @@ describe('executeJob', () => {
     const jobId = addJob('ow', [addMapping('ow', src, dest, { conflictPolicy: 'overwrite' })]);
 
     // Off: overwrites in place, so the real (Electron) trash is never reached.
-    repo.setOverwriteBackup(db, false);
-    expect(repo.getOverwriteBackup(db)).toBe(false);
+    runSettings.setOverwriteBackup(db, false);
+    expect(runSettings.getOverwriteBackup(db)).toBe(false);
     const result = await executeJob(db, jobId, 'manual');
     expect(result.filesMoved).toBe(1);
     expect(fs.readFileSync(path.join(dest, 'a.txt'), 'utf8')).toBe('NEW');
 
-    repo.setOverwriteBackup(db, true);
-    expect(repo.getOverwriteBackup(db)).toBe(true);
+    runSettings.setOverwriteBackup(db, true);
+    expect(runSettings.getOverwriteBackup(db)).toBe(true);
   });
 
   it('rejects an unknown job', async () => {

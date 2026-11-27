@@ -9,6 +9,7 @@ import {
 } from '../../shared/types';
 import * as repo from '../database/repository';
 import { checkFolder } from '../folderCheck';
+import { runSettings } from '../settings/appSettings';
 import { inputToConfig, previewJob, previewMapping } from '../services/previewService';
 import {
   AssistantJobInput,
@@ -279,7 +280,7 @@ export function createFileShuttleServer(sdk: AgentSdk, ctx: AgentContext) {
               if (!record) return fail(`No mapping with id ${mappingId}.`);
               return ok(
                 summarizePreview(
-                  await previewMapping(repo.toMappingConfig(record), { unzipLimits: repo.getUnzipLimits(db()) })
+                  await previewMapping(repo.toMappingConfig(record), { unzipLimits: runSettings.read(db()).unzipLimits })
                 )
               );
             }
@@ -287,7 +288,7 @@ export function createFileShuttleServer(sdk: AgentSdk, ctx: AgentContext) {
             const check = await checkMapping(db(), mapping as AssistantMappingInput);
             if (check.errors.length) return fail(`Fix these first: ${check.errors.join(' ')}`);
             const config = inputToConfig(toMappingInput(db(), mapping as AssistantMappingInput));
-            return ok(summarizePreview(await previewMapping(config, { unzipLimits: repo.getUnzipLimits(db()) })));
+            return ok(summarizePreview(await previewMapping(config, { unzipLimits: runSettings.read(db()).unzipLimits })));
           } catch (e) {
             return fail(errorText(e));
           }

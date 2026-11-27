@@ -8,9 +8,12 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 
 - Phone access, next steps (the first phase, "open File Shuttle from the phone",
   is done: Settings → Remote access, an HTTP server on 127.0.0.1 behind
-  `tailscale serve`, the same UI in the phone's browser). Still to do: split a hub
-  and per-PC workers so the phone can manage jobs on several computers (this phase
-  deliberately left the database schema alone); a web-push or notification path
+  `tailscale serve`, the same UI in the phone's browser). The hub/worker split is
+  prepared and runs in one process (workers table, `worker_id`/`run_uid`,
+  `src/shared/workerProtocol.ts`, in-process transport). Still to do: a network
+  transport, worker tokens and pairing, a second worker, and showing offline
+  workers (heartbeat constants exist, no timer yet) so the phone can manage jobs
+  on several computers; a web-push or notification path
   for finished runs; a PWA manifest/icon so it can be added to the home screen;
   a check on a real phone and a real tailnet (the layout was written for ~390 px
   but only built and unit-tested here).
