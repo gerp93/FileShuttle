@@ -1,0 +1,23 @@
+#!/bin/sh
+# FileShuttle server: stop the service when the package is removed. Data and settings are kept. Re-runnable.
+set -e
+
+UNIT=fileshuttle-server.service
+
+case "$1" in
+  remove|deconfigure)
+    if [ -d /run/systemd/system ]; then
+      systemctl stop "$UNIT" || true
+      systemctl disable "$UNIT" >/dev/null 2>&1 || true
+    fi
+    ;;
+  upgrade|failed-upgrade)
+    # postinst of the new version restarts it.
+    ;;
+  *)
+    echo "prerm called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

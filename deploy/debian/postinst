@@ -1,0 +1,51 @@
+#!/bin/sh
+# FileShuttle server: create the system user and data folder, register the unit. Re-runnable; holds no app code.
+set -e
+
+USER_NAME=fileshuttle-server
+DATA_DIR=/var/lib/fileshuttle-server
+UNIT=fileshuttle-server.service
+
+case "$1" in
+  configure)
+    if ! getent passwd "$USER_NAME" >/dev/null 2>&1; then
+      if command -v adduser >/dev/null 2>&1; then
+        adduser --system --group --quiet --home "$DATA_DIR" --no-create-home --shell /usr/sbin/nologin \
+          --gecos "FileShuttle server" "$USER_NAME"
+      else
+        useradd --system --user-group --home-dir "$DATA_DIR" --no-create-home --shell /usr/sbin/nologin "$USER_NAME"
+      fi
+    fi
+
+    install -d -o "$USER_NAME" -g "$USER_NAME" -m 0750 "$DATA_DIR"
+
+    # The settings file holds no secrets; let the service user read it so `set-password` sees the same settings.
+    if [ -f /etc/fileshuttle-server/server.env ]; then
+      chgrp "$USER_NAME" /etc/fileshuttle-server/server.env 2>/dev/null || true
+    fi
+
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload || true
+      if [ -z "$2" ]; then
+        # First install: enable it for boot but do not start it. Nobody can sign in until a password is set, and
+        # the owner decides which folders it may touch (see /etc/fileshuttle-server/server.env) before it runs.
+        systemctl enable "$UNIT" >/dev/null 2>&1 || true
+        echo "FileShuttle server installed (not started)." >&2
+        echo "  1. Set the web password:   sudo -u $USER_NAME fileshuttle-server set-password" >&2
+        echo "  2. Start it:               sudo systemctl start $UNIT" >&2
+        echo "  3. Publish it to your tailnet only:   sudo tailscale serve --bg 8765   (never tailscale funnel)" >&2
+      else
+        # Upgrade: pick up the new program if it was running; a stopped service stays stopped.
+        systemctl try-restart "$UNIT" || true
+      fi
+    fi
+    ;;
+  abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+  *)
+    echo "postinst called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

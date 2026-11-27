@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.main.json",
+  "compilerOptions": { "noEmit": true, "rootDir": "src" },
+  "include": ["src/server/**/*", "src/main/**/*", "src/shared/**/*"],
+  "exclude": ["**/*.test.ts", "**/testUtils.ts"]
+}

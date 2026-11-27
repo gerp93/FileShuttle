@@ -1,0 +1,43 @@
+#!/bin/sh
+# FileShuttle server: `remove` keeps the data; `purge` deletes the database and settings (and the user) -- but never
+# files the server moved to its trash, which are the user's files. Re-runnable.
+set -e
+
+USER_NAME=fileshuttle-server
+DATA_DIR=/var/lib/fileshuttle-server
+
+case "$1" in
+  remove|purge|upgrade|disappear)
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload || true
+    fi
+    ;;
+esac
+
+case "$1" in
+  purge)
+    if [ -d "$DATA_DIR" ]; then
+      # Everything except the trash. (The trash may be elsewhere if the owner set FILESHUTTLE_SERVER_TRASH_DIR.)
+      find "$DATA_DIR" -mindepth 1 -maxdepth 1 ! -name Trash -exec rm -rf -- {} + || true
+      if [ -d "$DATA_DIR/Trash" ] && [ -n "$(ls -A "$DATA_DIR/Trash" 2>/dev/null)" ]; then
+        echo "FileShuttle server: files it deleted are still in $DATA_DIR/Trash and were NOT removed." >&2
+        echo "  Restore what you need, then delete that folder yourself. The $USER_NAME user was kept for it." >&2
+        KEEP_USER=1
+      else
+        rm -rf -- "$DATA_DIR" || true
+      fi
+    fi
+    rmdir /etc/fileshuttle-server 2>/dev/null || true
+    if [ -z "$KEEP_USER" ] && getent passwd "$USER_NAME" >/dev/null 2>&1; then
+      deluser --system --quiet "$USER_NAME" 2>/dev/null || userdel "$USER_NAME" 2>/dev/null || true
+    fi
+    ;;
+  remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    ;;
+  *)
+    echo "postrm called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

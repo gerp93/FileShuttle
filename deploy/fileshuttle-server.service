@@ -1,0 +1,31 @@
+[Unit]
+Description=FileShuttle server (hub and worker)
+Documentation=https://github.com/gerp93/FileShuttle
+After=network.target
+
+[Service]
+Type=simple
+User=fileshuttle-server
+Group=fileshuttle-server
+# Settings (all optional, all commented out by default) live in this file; see it for what each one does.
+EnvironmentFile=/etc/fileshuttle-server/server.env
+ExecStart=/usr/bin/fileshuttle-server all
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+MemoryMax=256M
+
+# This service can move and delete files, so it gets as little else as possible.
+NoNewPrivileges=yes
+ProtectSystem=strict
+# /home is readable but NOT writable. To let jobs change folders outside /home or in it, add them with a drop-in:
+#   sudo systemctl edit fileshuttle-server      ->  [Service]  ReadWritePaths=/srv/inbox /mnt/data
+ProtectHome=read-only
+ReadWritePaths=/var/lib/fileshuttle-server
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

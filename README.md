@@ -133,6 +133,55 @@ How it is protected:
   (CSRF), the page is served with a strict Content-Security-Policy, and only an
   explicit list of operations can be called (see `src/main/api/channels.ts`).
 
+## Headless server
+
+The hub and worker also run **without Electron**, as one Node program, for a
+Linux box that is always on. It serves the same web UI and API as "Open it from
+your phone", with password sign-in, and is packaged as a `.deb`
+(`fileshuttle-server`) by KVG_Standards' `release-node-deb.yml`.
+
+```bash
+fileshuttle-server --version
+fileshuttle-server set-password   # asks twice (hidden); or pipe the password on stdin
+fileshuttle-server all            # hub + a worker in this process (what the service runs)
+fileshuttle-server hub            # hub only
+fileshuttle-server worker         # not available yet (phase 5): exits with status 2
+```
+
+- **Loopback only.** It listens on `127.0.0.1:8765` and refuses to start on any
+  other address (`FILESHUTTLE_SERVER_HOST`) unless you also set
+  `FILESHUTTLE_SERVER_ALLOW_NON_LOOPBACK=1`, which is not needed and not
+  recommended. It can move and delete files, so it is never exposed directly.
+- **Reach it with `tailscale serve`, never Funnel:**
+  `sudo tailscale serve --bg 8765` shares it with your tailnet only.
+  `tailscale funnel` would publish it to the whole internet; don't.
+- **Settings** are in `/etc/fileshuttle-server/server.env` (all commented
+  defaults, no secrets): data folder (`/var/lib/fileshuttle-server`), port, host,
+  web folder, trash folder. The password is stored hashed in the database.
+- **First start.** The package enables the service but does not start it. Set the
+  password (`sudo -u fileshuttle-server fileshuttle-server set-password`), then
+  `sudo systemctl start fileshuttle-server`.
+- **Which folders jobs can touch.** The unit runs as the unprivileged user
+  `fileshuttle-server` with `ProtectSystem=strict` and `ProtectHome=read-only`, so
+  it can read most things but write only to its data folder. A job that changes
+  files elsewhere, including anywhere under `/home`, fails until you add the
+  folders with a drop-in (`sudo systemctl edit fileshuttle-server`):
+
+  ```ini
+  [Service]
+  ReadWritePaths=/srv/inbox /mnt/data
+  ```
+
+  The user also needs normal file permissions there. Deleted files go to a
+  freedesktop trash (default `<data dir>/Trash`; folders on another drive use
+  that drive's `.Trash-<uid>`); if a file can't be trashed it is left in place and
+  the file fails, never deleted outright.
+- Removing the package keeps the data; purging deletes the database and settings
+  (and the user), but not files still in the trash.
+
+Build it with `npm run build:server` (one file, `dist/server/fileshuttle-server.cjs`,
+no `electron` in its imports; a test enforces that).
+
 ## Safety and undo
 
 FileShuttle moves and deletes real files, so it is conservative by default:
@@ -182,10 +231,11 @@ FileShuttle moves and deletes real files, so it is conservative by default:
 | Delete | Restores the files from the Recycle Bin |
 | Overwrite | Also brings back the files the run replaced |
 
-Restoring from the Recycle Bin is **Windows only** (Electron can send items to
-the bin but not restore them, so FileShuttle uses the Windows Shell), and only
-works while the items are still in the bin. The History dialog lists exactly
-what Undo will do before you confirm.
+Restoring is supported on **Windows** (the Recycle Bin, through the Windows Shell)
+and **Linux** (the freedesktop.org trash: `files/` and `info/*.trashinfo`, so the
+desktop's own "Restore" works too). It only works while the items are still in
+the trash, and a file is never overwritten when it comes back. The History dialog
+lists exactly what Undo will do before you confirm. macOS is not supported yet.
 
 ### Things to know
 
@@ -243,7 +293,7 @@ npm run package
 
 - `src/main/` — Electron main process
   - `engine/` — the file engine: `mover.ts` (run), `undo.ts`, `zipStream.ts`
-    (streaming zip), `recycleBin.ts` (restore), `filters.ts`
+    (streaming zip), `recycleBin.ts` (restore), `freedesktopTrash.ts` (Linux trash and restore), `filters.ts`
   - `database/` — `node:sqlite` (named only in `sqlite.ts`), schema/migrations,
     file copies
   - `services/` — previews, retention, start-at-login
@@ -254,6 +304,8 @@ npm run package
   - `agent/` — the in-app assistant: `tools.ts` (the only things it can do),
     `actions.ts` (what saving is allowed to change), `session.ts` (approvals),
     `prompt.ts`
+- `src/server/` — the headless server: `cli.ts` (commands), `config.ts` (env settings), `server.ts` (hub + worker + web), `entry.ts`; built by `vite.server.config.ts`
+- `deploy/` — systemd unit, env file and Debian maintainer scripts for the server package
 - `src/main/preload.ts` — typed bridge to the renderer
 - `src/renderer/` — React UI (Jobs, Mappings, Editor, History, Settings)
 - `src/shared/` — types and pure logic shared by both sides: validation, path

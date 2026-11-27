@@ -18,6 +18,13 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
   a check on a real phone and a real tailnet (the layout was written for ~390 px
   but only built and unit-tested here).
 
+- Headless server, next steps (phase 4a is done: `fileshuttle-server` .deb,
+  `hub`/`all`, loopback + `tailscale serve`). Still to do: the `worker` command
+  and its network transport, worker tokens and pairing, an outbox for a worker
+  that is offline, a Windows build of the server, and replacing the in-app
+  assistant with MCP. Not checked yet: the .deb built and installed by the real
+  workflow, Node SEA's `process.argv` handling, and a real tailnet.
+
 - Windows Task Scheduler integration so scheduled mappings can run even
   when the app itself isn't open. Schedules and watchers only fire while the
   app process is running; "catch up" covers gaps but not a closed app that
@@ -27,8 +34,8 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
   how later steps in a chain learn which files an earlier step produced).
 - Job preview that simulates later steps against the earlier steps' output
   (today each step is previewed against the folders as they are now).
-- Undo/restore from the Recycle Bin on macOS and Linux (today it is Windows
-  only; Electron can trash but not restore).
+- Undo/restore from the Trash on macOS (Windows and Linux are done; Electron can
+  trash but not restore).
 - Undo for an unzip that merged into an existing folder (needs per-file
   extraction records so the user's own files can be told apart).
 
