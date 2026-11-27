@@ -9,8 +9,12 @@ import {
 import { errorMessage } from '../utils/errors';
 import { useTheme } from '../context/ThemeContext';
 import { FletThemeId, getThemeList } from '../utils/themes';
+import { isWebMode } from '../utils/platform';
+import RemoteAccessSection from '../components/RemoteAccessSection';
 
 export default function Settings() {
+  // On the phone the PC-only parts (start-up, database file, updates, remote access itself) are hidden.
+  const web = isWebMode();
   const { themeId, setThemeId } = useTheme();
   const [dbPath, setDbPath] = useState('');
   const [isDefaultDb, setIsDefaultDb] = useState(true);
@@ -29,14 +33,16 @@ export default function Settings() {
   const [version, setVersion] = useState('');
 
   useEffect(() => {
-    void window.fileshuttleAPI.dbLocation.get().then((info) => {
-      setDbPath(info.path);
-      setIsDefaultDb(info.isDefault);
-    });
-    void window.fileshuttleAPI.settings.getStartup().then((s) => {
-      setStartupSupported(s.supported);
-      setStartupEnabled(s.enabled);
-    });
+    if (!web) {
+      void window.fileshuttleAPI.dbLocation.get().then((info) => {
+        setDbPath(info.path);
+        setIsDefaultDb(info.isDefault);
+      });
+      void window.fileshuttleAPI.settings.getStartup().then((s) => {
+        setStartupSupported(s.supported);
+        setStartupEnabled(s.enabled);
+      });
+    }
     void window.fileshuttleAPI.settings.getOverwriteBackup().then(setOverwriteBackup);
     void window.fileshuttleAPI.settings.getUnzipLimits().then((limits) => {
       setUnzipEntries(String(limits.maxEntries));
@@ -47,7 +53,7 @@ export default function Settings() {
     if (typeof getLogRetention === 'function') {
       void getLogRetention().then(setLogRetention);
     }
-  }, []);
+  }, [web]);
 
   const saveUnzipLimits = async () => {
     const limits = { maxEntries: Number(unzipEntries), maxTotalGB: Number(unzipGB) };
@@ -133,29 +139,33 @@ export default function Settings() {
     <div>
       <h1 className="page-title">Settings</h1>
 
-      <h2 style={{ fontSize: 16 }}>Startup &amp; Background</h2>
-      <div className="switch-row" style={{ marginBottom: 8 }}>
-        <input
-          type="checkbox"
-          id="startup"
-          checked={startupEnabled}
-          disabled={!startupSupported}
-          onChange={(e) => {
-            setStartupEnabled(e.target.checked);
-            void window.fileshuttleAPI.settings.setStartup(e.target.checked);
-          }}
-        />
-        <label htmlFor="startup">Start FileShuttle when Windows starts</label>
-      </div>
-      <p className="muted">
-        Closing this window keeps FileShuttle running in the background (system tray)
-        so scheduled mappings keep firing. Use the tray icon to reopen the window or quit.
-      </p>
-      {!startupSupported && (
-        <p className="muted">Start-at-login isn&apos;t supported on this platform yet.</p>
-      )}
+      {!web && (
+        <>
+          <h2 style={{ fontSize: 16 }}>Startup &amp; Background</h2>
+          <div className="switch-row" style={{ marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              id="startup"
+              checked={startupEnabled}
+              disabled={!startupSupported}
+              onChange={(e) => {
+                setStartupEnabled(e.target.checked);
+                void window.fileshuttleAPI.settings.setStartup(e.target.checked);
+              }}
+            />
+            <label htmlFor="startup">Start FileShuttle when Windows starts</label>
+          </div>
+          <p className="muted">
+            Closing this window keeps FileShuttle running in the background (system tray)
+            so scheduled mappings keep firing. Use the tray icon to reopen the window or quit.
+          </p>
+          {!startupSupported && (
+            <p className="muted">Start-at-login isn&apos;t supported on this platform yet.</p>
+          )}
 
-      <hr className="divider" />
+          <hr className="divider" />
+        </>
+      )}
 
       <h2 style={{ fontSize: 16 }}>Safety</h2>
       <div className="switch-row" style={{ marginBottom: 8 }}>
@@ -233,21 +243,29 @@ export default function Settings() {
 
       <hr className="divider" />
 
-      <h2 style={{ fontSize: 16 }}>Database Location</h2>
-      <p className="muted" style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{dbPath}</p>
-      {isDefaultDb && <p className="muted">Using default location.</p>}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-        <button className="outline" onClick={() => void useExistingDb()}>Use Existing Database File</button>
-        <button className="outline" onClick={() => void moveDb()}>Move Database To New Location</button>
-        <button className="outline" onClick={resetDb}>Reset to Default Location</button>
-      </div>
+      {!web && (
+        <>
+          <h2 style={{ fontSize: 16 }}>Database Location</h2>
+          <p className="muted" style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{dbPath}</p>
+          {isDefaultDb && <p className="muted">Using default location.</p>}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            <button className="outline" onClick={() => void useExistingDb()}>Use Existing Database File</button>
+            <button className="outline" onClick={() => void moveDb()}>Move Database To New Location</button>
+            <button className="outline" onClick={resetDb}>Reset to Default Location</button>
+          </div>
 
-      <hr className="divider" />
+          <hr className="divider" />
 
-      <h2 style={{ fontSize: 16 }}>Updates</h2>
-      <p className="muted">Version {version}</p>
-      <button className="outline" onClick={() => void checkUpdate()}>Check for Updates</button>
-      {updateStatus && <p className="muted">{updateStatus}</p>}
+          <h2 style={{ fontSize: 16 }}>Updates</h2>
+          <p className="muted">Version {version}</p>
+          <button className="outline" onClick={() => void checkUpdate()}>Check for Updates</button>
+          {updateStatus && <p className="muted">{updateStatus}</p>}
+
+          <hr className="divider" />
+
+          <RemoteAccessSection />
+        </>
+      )}
 
       {confirmPurge && (
         <div className="dialog-overlay">

@@ -134,6 +134,8 @@ button.danger {
 }
 
 input[type='text'],
+input[type='password'],
+textarea,
 input[type='number'],
 select {
   background: var(--color-surface);
@@ -418,4 +420,209 @@ label.field {
 
 .preview-error {
   color: var(--color-accent-red);
+}
+
+/* --- Sign-in page, in-page folder browser and remote-access form (phone support) --- */
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 360px;
+  text-align: center;
+}
+
+.auth-card form {
+  text-align: left;
+}
+
+.auth-ok {
+  height: 100%;
+}
+
+.folder-browser {
+  max-width: 560px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.folder-browser-nav {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.folder-browser-list {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.folder-browser-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--color-text);
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  padding: 12px;
+  font-size: 14px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.folder-browser-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.history-path-static {
+  cursor: default;
+}
+
+.remote-form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+/* --- Phone-sized screens. The desktop window never gets this narrow (minWidth 900). --- */
+@media (max-width: 760px) {
+  #root,
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .app-shell {
+    flex-direction: column;
+  }
+
+  /* The left rail becomes a bar across the top. */
+  .nav-rail {
+    width: 100%;
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: center;
+    padding: 6px 8px;
+    gap: 4px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+
+  .nav-rail img {
+    width: 32px;
+    height: 32px;
+    margin: 0 4px 0 0;
+  }
+
+  .nav-button {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+  }
+
+  .content-area {
+    padding: 12px;
+    overflow: visible;
+    min-width: 0;
+  }
+
+  .content-area:has(.history-page) {
+    overflow: visible;
+  }
+
+  .history-page {
+    height: auto;
+  }
+
+  .history-body {
+    overflow: visible;
+    padding: 12px;
+  }
+
+  .status-legend {
+    padding: 8px 12px;
+  }
+
+  /* Thumb-sized controls; 16px text stops iOS zooming the page when a field gets focus. */
+  button,
+  button.primary,
+  button.outline,
+  button.secondary,
+  button.text {
+    min-height: 44px;
+  }
+
+  input[type='text'],
+  input[type='number'],
+  input[type='password'],
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px;
+    max-width: 100%;
+  }
+
+  input[type='checkbox'] {
+    width: 22px;
+    height: 22px;
+  }
+
+  .field-row,
+  .filter-row,
+  .page-header {
+    flex-wrap: wrap;
+  }
+
+  .field-row .grow {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
+  .card,
+  .history-step {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .dialog {
+    width: calc(100% - 24px);
+    max-width: none;
+    padding: 16px;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+
+  .dialog-wide {
+    max-width: none;
+  }
+
+  .dialog-actions {
+    flex-wrap: wrap;
+  }
+
+  .snackbar {
+    max-width: calc(100% - 24px);
+  }
+
+  .remote-form label.field {
+    flex: 1 1 100%;
+  }
 }
