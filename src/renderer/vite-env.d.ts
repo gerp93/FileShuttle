@@ -15,6 +15,7 @@ import type {
   LogRetentionId,
   MappingRecord,
   PurgeResult,
+  McpTokenInfo,
   RemoteSettingsInput,
   RemoteState,
   RunAllSummary,
@@ -28,10 +29,8 @@ import type {
   UpdateJobInput,
   UpdateMappingInput,
 } from '../shared/types';
-import type { AgentApi } from '../shared/agentTypes';
 
 interface FileShuttleAPI {
-  agent: AgentApi;
   mappings: {
     list: () => Promise<MappingRecord[]>;
     get: (id: number) => Promise<MappingRecord | null>;
@@ -103,6 +102,12 @@ interface FileShuttleAPI {
     getSettings: () => Promise<RemoteState>;
     setSettings: (input: RemoteSettingsInput) => Promise<RemoteState>;
     setPassword: (password: string) => Promise<RemoteState>;
+  };
+  /** MCP access tokens (Settings, desktop only). A new token is returned once and never kept. */
+  mcp: {
+    listTokens: () => Promise<McpTokenInfo[]>;
+    createToken: (name: string) => Promise<{ name: string; token: string }>;
+    revokeToken: (name: string) => Promise<boolean>;
   };
   updates: {
     check: () => Promise<UpdateCheckResult>;

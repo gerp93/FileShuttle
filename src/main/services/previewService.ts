@@ -55,8 +55,8 @@ export function inputToConfig(input: CreateMappingInput, id = 0): MappingConfig 
 
 /**
  * Previews every enabled step against the folders as they are right now, in this process.
- * Only the assistant's tools call this directly; the window and the phone go through the hub
- * (Hub.previewJob), which asks the job's worker.
+ * The window, the phone and the MCP tools go through the hub (Hub.previewJob), which asks the
+ * job's worker; this in-process version is kept for tests and tools that run on this machine only.
  *
  * Steps after the first are shown the same way, so a step that consumes the
  * output of an earlier step will look emptier here than it will on a real run.

@@ -4,7 +4,7 @@
  * Kept free of any Electron import so tests (and the HTTP server) can use it. Every channel the
  * renderer calls is either in the shared handler table (api/handlers.ts: callable over IPC, and
  * over HTTP only if listed in HTTP_CHANNELS) or in DESKTOP_CHANNELS (IPC only, registered in
- * main.ts because they need a native dialog, the shell, the app lifecycle or Claude itself).
+ * main.ts because they need a native dialog, the shell, or the app lifecycle).
  */
 
 /** The only channels the phone can call. Anything not listed here answers 404 over HTTP. */
@@ -51,13 +51,6 @@ export const HTTP_CHANNELS: readonly string[] = [
 
 /** IPC only. Never reachable over HTTP. */
 export const DESKTOP_CHANNELS: readonly string[] = [
-  'agent:send',
-  'agent:interrupt',
-  'agent:reset',
-  'agent:approve',
-  'agent:login',
-  'agent:loginCode',
-  'agent:authStatus',
   'dialogs:pickFolder',
   'shell:openPath',
   'settings:getStartup',
@@ -72,4 +65,8 @@ export const DESKTOP_CHANNELS: readonly string[] = [
   'remote:getSettings',
   'remote:setSettings',
   'remote:setPassword',
+  // MCP access tokens are made on the PC only: a phone session must never be able to mint one.
+  'mcp:listTokens',
+  'mcp:createToken',
+  'mcp:revokeToken',
 ];

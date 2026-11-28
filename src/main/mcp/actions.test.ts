@@ -5,8 +5,8 @@ import * as repo from '../database/repository';
 import { initDatabase } from '../database/schema';
 import { listTree, makeTempDir, removeDir, writeFile } from '../engine/testUtils';
 import {
-  AssistantJobInput,
-  AssistantMappingInput,
+  McpJobInput,
+  McpMappingInput,
   checkJob,
   checkMapping,
   listFolder,
@@ -29,7 +29,7 @@ afterEach(() => {
   removeDir(root);
 });
 
-function mappingInput(overrides: Partial<AssistantMappingInput> = {}): AssistantMappingInput {
+function mappingInput(overrides: Partial<McpMappingInput> = {}): McpMappingInput {
   return {
     name: 'PDFs',
     sourcePath: path.join(root, 'src'),
@@ -44,7 +44,7 @@ function mappingInput(overrides: Partial<AssistantMappingInput> = {}): Assistant
   };
 }
 
-function jobInput(mappingIds: number[], overrides: Partial<AssistantJobInput> = {}): AssistantJobInput {
+function jobInput(mappingIds: number[], overrides: Partial<McpJobInput> = {}): McpJobInput {
   return {
     name: 'Nightly',
     scheduleType: 'daily_at',
@@ -87,7 +87,7 @@ describe('saveMapping', () => {
 });
 
 describe('saveJob', () => {
-  it('always saves a job switched off, so nothing runs until the user enables it', () => {
+  it('saves a NEW job switched off, so nothing runs until it is switched on', () => {
     const mappingId = saveMapping(db, mappingInput());
     const jobId = saveJob(db, jobInput([mappingId]));
     const job = repo.getJob(db, jobId)!;
@@ -97,14 +97,14 @@ describe('saveJob', () => {
     expect(job.steps.map((s) => s.id)).toEqual([mappingId]);
   });
 
-  it('switches an already-enabled job off when it edits it', () => {
+  it('keeps an existing job\'s on/off state when it edits it', () => {
     const mappingId = saveMapping(db, mappingInput());
     const jobId = saveJob(db, jobInput([mappingId]));
     repo.setJobEnabled(db, jobId, true);
     saveJob(db, jobInput([mappingId], { id: jobId, name: 'Edited' }));
     const job = repo.getJob(db, jobId)!;
     expect(job.name).toBe('Edited');
-    expect(job.enabled).toBe(false);
+    expect(job.enabled).toBe(true);
   });
 
   it('refuses an unusable schedule, an empty job, and unknown mappings', () => {

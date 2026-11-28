@@ -13,6 +13,13 @@ let currentDbPath: string | null = null;
 let recoveryNotice: string | null = null;
 
 export const STATEMENTS = [
+  // Access tokens for the MCP server. Only a SHA-256 hash of each token is kept, never the token.
+  `CREATE TABLE IF NOT EXISTS mcp_tokens (
+    name          TEXT PRIMARY KEY COLLATE NOCASE,
+    token_hash    TEXT NOT NULL UNIQUE,
+    created_at    TEXT NOT NULL,
+    last_used_at  TEXT
+  )`,
   `CREATE TABLE IF NOT EXISTS mappings (
     id                          INTEGER PRIMARY KEY AUTOINCREMENT,
     name                        TEXT NOT NULL,

@@ -21,7 +21,9 @@ import { logStartupStep, resetStartupLog } from './startupLog';
 import { attachContextMenu, setupApplicationMenu } from './menu';
 import { nearestExistingFolder } from './folderCheck';
 import { isStartupEnabled, isStartupSupported, setStartupEnabled } from './services/startup';
-import { AgentSession } from './agent/session';
+import { createMcpHandler, callLogPath } from './mcp/mcpEndpoint';
+import { createMcpToken, listMcpTokens, revokeMcpToken } from './mcp/tokens';
+import { getUserDataDir } from './appPaths';
 import { createHandlers } from './api/handlers';
 import { RemoteController } from './remote/controller';
 import { RetentionService } from './services/retention';
@@ -48,7 +50,6 @@ let db: Database | null = null;
 let hub: Hub | null = null;
 let workerSystem: InProcessSystem | null = null;
 let retention: RetentionService | null = null;
-let agent: AgentSession | null = null;
 let remote: RemoteController | null = null;
 let announcedBackground = false;
 let isQuitting = false;
@@ -377,27 +378,6 @@ function checkForUpdatesNow(): Promise<UpdateCheckResult> {
   });
 }
 
-/**
- * The in-app assistant. It is created on first use. It can only look at mappings, jobs, history and
- * folder listings, and save mappings/jobs the user approves (jobs always saved switched off); see
- * agent/actions.ts. It has no way to run, delete or enable anything.
- */
-function getAgent(): AgentSession {
-  if (!agent) {
-    agent = new AgentSession(
-      (event) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('agent:event', event);
-      },
-      {
-        getDb: () => db!,
-        afterChange: () => hub?.syncSchedules(),
-      },
-      path.join(app.getPath('userData'), 'assistant')
-    );
-  }
-  return agent;
-}
-
 function registerIPCHandlers(): void {
   // Everything that works the same from the window and from the phone lives in one table
   // (api/handlers.ts); the HTTP server calls the very same functions.
@@ -411,9 +391,18 @@ function registerIPCHandlers(): void {
     ipcMain.handle(channel, (_event, ...args) => handler(...args));
   }
 
+  // The MCP server lives inside the phone-access server: same loopback bind, same Tailscale rules, its own bearer-token auth.
+  const mcp = createMcpHandler({
+    context: { getDb: () => db!, hub: hub!, afterChange: () => hub?.syncSchedules() },
+    getDb: () => db!,
+    getVersion: () => app.getVersion(),
+    getLogPath: () => callLogPath(getUserDataDir()),
+  });
+
   remote = new RemoteController({
     getDb: () => db!,
     handlers,
+    mcp,
     // Same folder loadAppContent() opens in a packaged build.
     staticDir: path.join(__dirname, '../../renderer'),
     log: logStartupStep,
@@ -428,16 +417,6 @@ function registerIPCHandlers(): void {
   });
 
   // --- Desktop only: these never go over HTTP (see api/channels.ts) ---
-
-  ipcMain.handle('agent:send', (_, text: string) => getAgent().send(String(text ?? '')));
-  ipcMain.handle('agent:interrupt', () => getAgent().interrupt());
-  ipcMain.handle('agent:reset', () => getAgent().reset());
-  ipcMain.handle('agent:approve', (_, requestId: string, allow: boolean) =>
-    getAgent().approve(String(requestId), allow === true)
-  );
-  ipcMain.handle('agent:login', () => getAgent().login());
-  ipcMain.handle('agent:loginCode', (_, code: string) => getAgent().submitLoginCode(String(code ?? '')));
-  ipcMain.handle('agent:authStatus', () => getAgent().authStatus());
 
   ipcMain.handle('settings:getStartup', () => ({
     supported: isStartupSupported,
@@ -510,6 +489,11 @@ function registerIPCHandlers(): void {
   ipcMain.handle('remote:getSettings', () => remote!.state());
   ipcMain.handle('remote:setSettings', (_, input: RemoteSettingsInput) => remote!.setSettings(input ?? {}));
   ipcMain.handle('remote:setPassword', (_, password: string) => remote!.setPassword(String(password ?? '')));
+
+  // MCP tokens are made and revoked on the PC only (IPC), never over HTTP, so a stolen phone session can't mint one.
+  ipcMain.handle('mcp:listTokens', () => listMcpTokens(db!));
+  ipcMain.handle('mcp:createToken', (_, name: string) => createMcpToken(db!, String(name ?? '')));
+  ipcMain.handle('mcp:revokeToken', (_, name: string) => revokeMcpToken(db!, String(name ?? '')));
 
   // Off unless the user turned it on in Settings.
   void remote.apply();
@@ -618,7 +602,6 @@ app.on('before-quit', () => {
   isQuitting = true;
   workerSystem?.stop();
   retention?.shutdown();
-  agent?.dispose();
   void remote?.shutdown();
   if (db) flushDatabase(db);
 });

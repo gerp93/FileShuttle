@@ -45,7 +45,6 @@
     "wait-on": "^7.2.0"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.319",
     "chokidar": "^4.0.3",
     "electron-updater": "^6.8.9",
     "node-cron": "^3.0.3",
@@ -62,13 +61,6 @@
     "files": [
       "dist/**/*",
       "assets/**/*"
-    ],
-    "asarUnpack": [
-      "node_modules/@anthropic-ai/claude-agent-sdk/**",
-      "node_modules/@anthropic-ai/claude-agent-sdk-*/**",
-      "node_modules/zod/package.json",
-      "node_modules/zod/v4/**/*.js",
-      "node_modules/zod/v4/**/package.json"
     ],
     "directories": {
       "output": "release"
@@ -102,8 +94,7 @@
           ]
         }
       ],
-      "category": "public.app-category.utilities",
-      "x64ArchFiles": "**/claude-agent-sdk-darwin-*/claude"
+      "category": "public.app-category.utilities"
     },
     "linux": {
       "target": [
@@ -121,7 +112,6 @@
       "owner": "gerp93",
       "repo": "FileShuttle",
       "releaseType": "release"
-    },
-    "beforePack": "scripts/before-pack.js"
+    }
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Where this program keeps its own files (config, startup log, assistant folder).
+ * Where this program keeps its own files (config, startup log).
  *
  * Shared code never asks Electron for this. The desktop app (main.ts) and the headless server
  * (server/main.ts) each tell it once at startup, so nothing the server bundle imports reaches

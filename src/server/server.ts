@@ -12,6 +12,7 @@ import { HTTP_CHANNELS } from '../main/api/channels';
 import { Hub } from '../main/hub/hub';
 import { InProcessSystem, startInProcessWorker } from '../main/worker/inProcess';
 import { RemoteServer } from '../main/remote/server';
+import { callLogPath, createMcpHandler } from '../main/mcp/mcpEndpoint';
 import { checkRemotePassword, getRemoteSettings } from '../main/remote/remoteSettings';
 import { RetentionService } from '../main/services/retention';
 import { runSettings } from '../main/settings/appSettings';
@@ -65,11 +66,19 @@ export async function startServer(
     getVersion: () => APP_VERSION,
   });
 
+  const mcp = createMcpHandler({
+    context: { getDb: () => db, hub, afterChange: () => hub.syncSchedules() },
+    getDb: () => db,
+    getVersion: () => APP_VERSION,
+    getLogPath: () => callLogPath(config.dataDir),
+  });
+
   const web = new RemoteServer({
     port: config.port,
     host: config.host,
     staticDir: config.webDir,
     handlers,
+    mcp,
     allowedChannels: HTTP_CHANNELS,
     isPasswordSet: () => getRemoteSettings(db).hasPassword,
     checkPassword: (password) => checkRemotePassword(db, password),

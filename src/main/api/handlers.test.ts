@@ -12,7 +12,6 @@ vi.mock('../startupLog', () => ({ logStartupStep: () => undefined }));
 
 // Every channel main.ts registered before the handler table existed.
 const LEGACY_CHANNELS = [
-  'agent:send', 'agent:interrupt', 'agent:reset', 'agent:approve', 'agent:login', 'agent:loginCode', 'agent:authStatus',
   'mappings:list', 'mappings:get', 'mappings:create', 'mappings:update', 'mappings:delete', 'mappings:clone',
   'mappings:preview', 'mappings:previewInput', 'mappings:listJobsUsing', 'mappings:setEnabled', 'mappings:getStats',
   'jobs:list', 'jobs:get', 'jobs:create', 'jobs:update', 'jobs:delete', 'jobs:setEnabled', 'jobs:getStats',
@@ -26,7 +25,10 @@ const LEGACY_CHANNELS = [
   'app:getVersion', 'updates:check',
 ];
 
-const NEW_CHANNELS = ['dialogs:listFolder', 'remote:getSettings', 'remote:setSettings', 'remote:setPassword'];
+const NEW_CHANNELS = [
+  'dialogs:listFolder', 'remote:getSettings', 'remote:setSettings', 'remote:setPassword',
+  'mcp:listTokens', 'mcp:createToken', 'mcp:revokeToken',
+];
 
 function makeHandlers(db: Database | null = null) {
   const reloadJobs = vi.fn();
@@ -50,7 +52,7 @@ describe('handler table', () => {
 
   it('never exposes desktop-only things over HTTP', () => {
     for (const channel of HTTP_CHANNELS) {
-      expect(channel).not.toMatch(/^(agent|shell|dbLocation|remote|updates):/);
+      expect(channel).not.toMatch(/^(shell|dbLocation|remote|mcp|updates):/);
     }
     expect(HTTP_CHANNELS).not.toContain('dialogs:pickFolder');
     expect(HTTP_CHANNELS).not.toContain('settings:setStartup');

@@ -39,16 +39,18 @@ function importGraph(entry: string): { files: Set<string>; bare: Map<string, str
 const linuxOnly = describe.skipIf(process.platform === 'win32');
 
 describe('the server entry does not import Electron', () => {
-  it('has no electron, updater or assistant SDK import anywhere in its source graph', () => {
+  it('has no electron, updater or Claude SDK import anywhere in its source graph', () => {
     const { files, bare } = importGraph(ENTRY);
     expect(files.size).toBeGreaterThan(20); // the walk really followed the imports
     const forbidden = [...bare.entries()].filter(([spec]) => /^(electron|electron-|@anthropic-ai\/)/.test(spec));
     expect(forbidden).toEqual([]);
-    const names = [...files].map((f) => path.relative(ROOT, f));
+    const names = [...files].map((f) => path.relative(ROOT, f).split(path.sep).join('/'));
     for (const desktopOnly of ['src/main/main.ts', 'src/main/preload.ts', 'src/main/menu.ts', 'src/main/electronPaths.ts', 'src/main/electronTrash.ts']) {
       expect(names).not.toContain(desktopOnly);
     }
     expect(names.some((n) => n.startsWith('src/main/agent/'))).toBe(false);
+    // The MCP server is shared code and must be in the headless bundle.
+    expect(names).toContain('src/main/mcp/mcpEndpoint.ts');
   });
 });
 

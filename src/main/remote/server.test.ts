@@ -247,7 +247,7 @@ describe('CSRF and request validation', () => {
   it('answers 404 for unknown or unlisted channels, even if a handler exists', async () => {
     await start();
     const session = await signIn();
-    for (const channel of ['secret', 'nope', '__proto__', 'constructor', 'toString', 'agent:send', 'remote:setPassword']) {
+    for (const channel of ['secret', 'nope', '__proto__', 'constructor', 'toString', 'mcp:createToken', 'remote:setPassword']) {
       const res = await post(`/api/rpc/${encodeURIComponent(channel)}`, [], { Cookie: session });
       expect(res.status, channel).toBe(404);
       expect(res.body).not.toContain('should never');

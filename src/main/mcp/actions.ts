@@ -9,15 +9,15 @@ import * as repo from '../database/repository';
 import { checkFolder } from '../folderCheck';
 
 /**
- * The assistant's whole write surface. It can save mappings and jobs and nothing else, and what it
- * saves is constrained here, in code, not by the prompt:
- *  - a job it saves is always saved DISABLED, so nothing it sets up can run (on a schedule or by a
- *    watched folder) until the user has looked at it and turned it on;
- *  - a mapping it saves has no schedule of its own (jobs own scheduling);
- *  - it can never run, delete, enable, or undo anything.
+ * What the MCP tools may save, constrained here in code, not by what the model is told:
+ *  - a NEW job is always saved DISABLED, so nothing a model sets up can run (on a schedule or by a
+ *    watched folder) until it is switched on, which is its own tool and, for a job that deletes or
+ *    moves files, needs the user's confirmation; an existing job keeps its on/off state;
+ *  - a mapping has no schedule of its own (jobs own scheduling);
+ *  - saving never runs, deletes or undoes anything.
  */
 
-export interface AssistantMappingInput {
+export interface McpMappingInput {
   /** Set to update an existing mapping; leave out to create one. */
   id?: number;
   name: string;
@@ -31,7 +31,7 @@ export interface AssistantMappingInput {
   keepNewestPerExtension: boolean;
 }
 
-export interface AssistantJobInput {
+export interface McpJobInput {
   /** Set to update an existing job; leave out to create one. */
   id?: number;
   name: string;
@@ -43,8 +43,8 @@ export interface AssistantJobInput {
   mappingIds: number[];
 }
 
-/** Turns the assistant's mapping into the app's input. Preserves what the assistant must not change. */
-export function toMappingInput(db: Database, input: AssistantMappingInput): CreateMappingInput {
+/** Turns a tool's mapping into the app's input. Preserves what a tool must not change. */
+export function toMappingInput(db: Database, input: McpMappingInput): CreateMappingInput {
   const existing = input.id != null ? repo.getMapping(db, input.id) : null;
   if (input.id != null && !existing) throw new Error(`There is no mapping with id ${input.id}.`);
   return {
@@ -66,11 +66,11 @@ export function toMappingInput(db: Database, input: AssistantMappingInput): Crea
   };
 }
 
-export function toJobInput(input: AssistantJobInput): CreateJobInput {
+export function toJobInput(input: McpJobInput, enabled = false): CreateJobInput {
   return {
     name: input.name.trim(),
-    // Always off: the user reviews the job and switches it on themselves.
-    enabled: false,
+    // A new job is off; saveJob keeps an existing job's state.
+    enabled,
     catchUp: input.catchUp,
     scheduleType: input.scheduleType,
     scheduleIntervalMinutes: input.scheduleType === 'interval' ? input.scheduleIntervalMinutes : null,
@@ -87,7 +87,7 @@ export interface MappingCheck {
 }
 
 /** Everything that can be said about a mapping before saving it, including what is on disk right now. */
-export async function checkMapping(db: Database, input: AssistantMappingInput): Promise<MappingCheck> {
+export async function checkMapping(db: Database, input: McpMappingInput): Promise<MappingCheck> {
   const errors: string[] = [];
   const warnings: string[] = [];
   let converted: CreateMappingInput;
@@ -126,7 +126,7 @@ export async function checkMapping(db: Database, input: AssistantMappingInput): 
   return { errors, warnings };
 }
 
-export function checkJob(db: Database, input: AssistantJobInput): MappingCheck {
+export function checkJob(db: Database, input: McpJobInput): MappingCheck {
   const errors: string[] = [];
   const warnings: string[] = [];
   if (input.id != null && !repo.getJob(db, input.id)) errors.push(`There is no job with id ${input.id}.`);
@@ -146,7 +146,7 @@ export function checkJob(db: Database, input: AssistantJobInput): MappingCheck {
 }
 
 /** Saves (creates or updates) a mapping. Throws on validation problems. Returns the mapping's id. */
-export function saveMapping(db: Database, input: AssistantMappingInput): number {
+export function saveMapping(db: Database, input: McpMappingInput): number {
   const converted = toMappingInput(db, input);
   const problem = validateMappingInput(converted);
   if (problem) throw new Error(problem);
@@ -157,11 +157,12 @@ export function saveMapping(db: Database, input: AssistantMappingInput): number 
   return repo.createMapping(db, converted);
 }
 
-/** Saves (creates or updates) a job, switched off. Throws on validation problems. Returns the job's id. */
-export function saveJob(db: Database, input: AssistantJobInput): number {
+/** Saves (creates or updates) a job: a new one switched off, an existing one keeping its state. Throws on validation problems. Returns the job's id. */
+export function saveJob(db: Database, input: McpJobInput): number {
   const check = checkJob(db, input);
   if (check.errors.length) throw new Error(check.errors.join(' '));
-  const converted = toJobInput(input);
+  const existing = input.id != null ? repo.getJob(db, input.id) : null;
+  const converted = toJobInput(input, existing?.enabled ?? false);
   if (input.id != null) {
     repo.updateJob(db, input.id, converted);
     return input.id;
