@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { ConfigError, DEFAULT_DATA_DIR, DEFAULT_WEB_DIR, isLoopbackHost, parseServerConfig } from './config';
 import { userArgs } from './cli';
@@ -57,5 +60,18 @@ linuxOnly('userArgs', () => {
     const exe = '/usr/lib/fileshuttle-server/fileshuttle-server';
     expect(userArgs([exe, exe, 'all'], exe)).toEqual(['all']);
     expect(userArgs([exe, 'all'], exe)).toEqual(['all']);
+  });
+  it('treats the /usr/bin symlink as the executable itself', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fs-args-'));
+    try {
+      const exe = path.join(dir, 'fileshuttle-server');
+      const link = path.join(dir, 'link');
+      fs.writeFileSync(exe, '');
+      fs.symlinkSync(exe, link);
+      expect(userArgs([link, link, '--version'], exe)).toEqual(['--version']);
+      expect(userArgs([link, '--version'], exe)).toEqual(['--version']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

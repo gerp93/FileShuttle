@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { APP_VERSION, ConfigError, parseServerConfig } from './config';
 import { prepareDataDir, startServer } from './server';
@@ -21,9 +22,23 @@ The server listens on a loopback address only; publish it with "tailscale serve"
 `;
 
 /** The arguments after the program name, whether run as `node file.cjs ...` or as a single executable. */
+function sameFile(a: string, b: string): boolean {
+  const real = (p: string): string => {
+    try {
+      return fs.realpathSync(path.resolve(p));
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return real(a) === real(b);
+}
+
 export function userArgs(argv: string[], execPath: string = process.execPath): string[] {
   const first = argv[1];
-  const skip = first !== undefined && (path.resolve(first) === execPath || /\.[cm]?js$/.test(first));
+  // A single executable can see its own path again in argv[1], as typed: through the /usr/bin symlink, while
+  // execPath is the real file under /usr/lib. Compare real paths, or `fileshuttle-server --version` reads the
+  // symlink's path as the command.
+  const skip = first !== undefined && (sameFile(first, execPath) || /\.[cm]?js$/.test(first));
   return argv.slice(skip ? 2 : 1);
 }
 
