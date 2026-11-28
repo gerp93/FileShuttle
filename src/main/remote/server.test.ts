@@ -411,10 +411,44 @@ describe('worker endpoints', () => {
       accepted.push('connection');
       conn.onMessage((text) => conn.send(`echo:${text}`));
     },
+    importSetup: (workerId: unknown, token: unknown, body: unknown) => {
+      setupCalls.push({ workerId, token, body });
+      return token === 'good-token'
+        ? { status: 200, body: { ok: true, mappingsSent: 0, mappingsSkipped: [], jobsSent: 0, jobsSkipped: [] } }
+        : { status: 401, body: { ok: false, error: 'not accepted' } };
+    },
   });
+  const setupCalls: { workerId: unknown; token: unknown; body: unknown }[] = [];
   beforeEach(() => {
     pairCalls.length = 0;
     accepted.length = 0;
+    setupCalls.length = 0;
+  });
+
+  const sendSetup = (token: string, headers: http.OutgoingHttpHeaders = {}) =>
+    request('POST', '/api/workers/import-setup', {
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...headers },
+      body: JSON.stringify({ workerId: 'w', setup: { mappings: [], jobs: [] } }),
+    });
+
+  it('takes a paired machine\'s setup with its bearer token, never from a browser, and slows wrong tokens', async () => {
+    await start({ workers: workers() });
+    const ok = await sendSetup('good-token');
+    expect(ok.status).toBe(200);
+    expect(setupCalls[0]).toMatchObject({ workerId: 'w', token: 'good-token' });
+    expect((await sendSetup('good-token', { Origin: 'https://evil.example' })).status).toBe(403);
+    expect(setupCalls).toHaveLength(1);
+    let last = 0;
+    for (let i = 0; i < 12; i++) last = (await sendSetup('wrong')).status;
+    expect(last).toBe(429);
+    expect((await request('GET', '/api/workers/import-setup')).status).toBe(405);
+  });
+
+  it('applies the allowed-logins rule to the setup endpoint', async () => {
+    logins = ['me@example.com'];
+    await start({ workers: workers() });
+    expect((await sendSetup('good-token')).status).toBe(403);
+    expect((await sendSetup('good-token', { 'Tailscale-User-Login': 'me@example.com' })).status).toBe(200);
   });
 
   const plain = (body: unknown, headers: http.OutgoingHttpHeaders = {}) =>

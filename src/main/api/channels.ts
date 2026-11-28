@@ -72,4 +72,14 @@ export const DESKTOP_CHANNELS: readonly string[] = [
   'mcp:listTokens',
   'mcp:createToken',
   'mcp:revokeToken',
+  // "Use a remote hub": pairing, switching this computer's hub off, and the worker that serves the remote one.
+  'remoteHub:getState',
+  'remoteHub:enable',
+  'remoteHub:disable',
+  'remoteHub:setAllowedFolders',
+  'remoteHub:pickFolder',
+  'remoteHub:sendSetup',
+  'remoteHub:markSetupOffered',
+  'remoteHub:retry',
+  'remoteHub:useLocal',
 ];

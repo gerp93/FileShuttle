@@ -57,7 +57,12 @@ const ZOOM_IN_ITEMS: Electron.MenuItemConstructorOptions[] = [
  * and Help (repo/issues/version). Ported from the same pattern in
  * gerp93/RolePlaymate and gerp93/Bracketeer.
  */
-export function setupApplicationMenu(): void {
+export interface MenuOptions {
+  /** Present while this computer uses a remote hub: adds the way back to its local settings. */
+  remoteHub?: { open: () => void };
+}
+
+export function setupApplicationMenu(options: MenuOptions = {}): void {
   const isMac = process.platform === 'darwin';
 
   const viewMenu: Electron.MenuItemConstructorOptions = {
@@ -68,6 +73,12 @@ export function setupApplicationMenu(): void {
             { role: 'reload' as const },
             { role: 'forceReload' as const },
             { role: 'toggleDevTools' as const },
+            { type: 'separator' as const },
+          ]
+        : []),
+      ...(options.remoteHub
+        ? [
+            { label: 'Remote hub settings…', accelerator: 'CmdOrCtrl+Shift+H', click: () => options.remoteHub?.open() },
             { type: 'separator' as const },
           ]
         : []),

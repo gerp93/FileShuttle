@@ -76,7 +76,7 @@ export async function startServer(
 
   const gateway = new WorkerGateway({ getDb: () => db, hub, log: (message) => log(`workers: ${message}`) });
   const web = new RemoteServer({
-    workers: { pair: gateway.pair, accept: gateway.accept },
+    workers: { pair: gateway.pair, accept: gateway.accept, importSetup: gateway.importSetup },
     port: config.port,
     host: config.host,
     staticDir: config.webDir,

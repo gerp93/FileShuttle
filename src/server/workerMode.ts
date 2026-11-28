@@ -3,13 +3,10 @@ import * as path from 'path';
 import { setUserDataDir } from '../main/appPaths';
 import { configureLinuxTrash } from '../main/engine/freedesktopTrash';
 import { setStartupLogToFile, logStartupStep } from '../main/startupLog';
-import { DEFAULT_UNZIP_LIMITS_SETTING } from '../shared/types';
-import { AllowedFolders } from '../main/worker/allowedFolders';
-import { PairResult, RemoteTransport, WebSocketFactory, pairWithHub, validateHubUrl } from '../main/worker/hubClient';
-import { Outbox } from '../main/worker/outbox';
+import { PairResult, WebSocketFactory, pairWithHub, validateHubUrl } from '../main/worker/hubClient';
+import { RunningRemoteWorker, startRemoteWorker } from '../main/worker/remoteWorker';
 import { createTokenStore, TokenStore } from '../main/worker/tokenStore';
-import { WorkerConfig, WorkerConfigError, createScheduleStore, savePairing } from '../main/worker/workerConfig';
-import { WorkerRuntime } from '../main/worker/workerRuntime';
+import { WorkerConfig, WorkerConfigError, savePairing } from '../main/worker/workerConfig';
 import { APP_VERSION } from './config';
 
 /** What `fileshuttle-server worker pair` does: validates the address, trades the code, saves the id and token. */
@@ -33,12 +30,7 @@ export async function pairWorker(
   return result;
 }
 
-export interface RunningWorker {
-  runtime: WorkerRuntime;
-  transport: RemoteTransport;
-  allowedFolders: AllowedFolders;
-  stop(): void;
-}
+export type RunningWorker = RunningRemoteWorker;
 
 /** Runs this machine as a worker for the hub it was paired with. Resolves once started (it keeps running until stop). */
 export async function startWorker(
@@ -60,57 +52,25 @@ export async function startWorker(
   setStartupLogToFile(false);
   configureLinuxTrash({ homeTrashDir: path.join(config.dataDir, 'Trash') });
 
-  const allowedFolders = new AllowedFolders(config.allowedFolders);
-  if (allowedFolders.isEmpty) {
-    log('No allowed folders are set, so this machine refuses every folder. Set FILESHUTTLE_WORKER_ALLOWED_FOLDERS or "allowedFolders" in worker.json.');
-  } else {
-    log(`Allowed folders: ${allowedFolders.list().join(', ')}`);
-  }
-
-  const transport = new RemoteTransport({
+  const running = startRemoteWorker({
     hubUrl,
+    workerId: config.workerId,
+    token,
+    dataDir: config.dataDir,
+    allowedFolders: config.allowedFolders,
+    appVersion: APP_VERSION,
     log,
     factory: deps.factory,
     backoffStartMs: deps.backoffStartMs,
     backoffMaxMs: deps.backoffMaxMs,
-    onOpen: () => runtime.connect(),
-  });
-  const runtime = new WorkerRuntime({
-    workerId: config.workerId,
-    appVersion: APP_VERSION,
-    token,
-    platform: process.platform,
-    endpoint: transport,
-    // A remote worker has no database, so it runs with the defaults (backup of overwritten files on).
-    readRunSettings: () => ({
-      overwriteBackup: true,
-      unzipLimits: {
-        maxEntries: DEFAULT_UNZIP_LIMITS_SETTING.maxEntries,
-        maxTotalBytes: Math.floor(DEFAULT_UNZIP_LIMITS_SETTING.maxTotalGB * 1024 ** 3),
-      },
-    }),
-    allowedFolders,
-    outbox: new Outbox(path.join(config.dataDir, 'outbox')),
-    scheduleStore: createScheduleStore(config.dataDir),
-    heartbeat: deps.heartbeat ?? true,
+    heartbeat: deps.heartbeat,
     onBackgroundRunFinished: (kind, jobId, result) =>
       logStartupStep(
         `${kind} run finished: job ${jobId}, moved ${result.filesMoved}, copied ${result.filesCopied}, deleted ${result.filesDeleted}, errors ${result.filesErrored}`
       ),
   });
-  runtime.loadStoredSchedule();
-  transport.start();
-
-  let stopped = false;
-  return {
-    runtime,
-    transport,
-    allowedFolders,
-    stop() {
-      if (stopped) return;
-      stopped = true;
-      transport.stop();
-      runtime.shutdown();
-    },
-  };
+  if (running.allowedFolders.isEmpty) {
+    log('Set FILESHUTTLE_WORKER_ALLOWED_FOLDERS or "allowedFolders" in worker.json.');
+  }
+  return running;
 }

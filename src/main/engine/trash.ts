@@ -20,5 +20,9 @@ export const defaultTrash: TrashFn = async (filePath) => {
   if (process.platform === 'linux') {
     return getLinuxTrash().trash(filePath);
   }
+  if (process.platform === 'win32') {
+    // The Windows server/worker has no Recycle Bin API without native code, so deletes are refused (never done outright).
+    throw new Error('this Windows worker cannot use the Recycle Bin, so the file was left in place; use the desktop app for deletes');
+  }
   throw new Error('no Recycle Bin is available here, so the file was left in place');
 };

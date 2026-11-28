@@ -29,6 +29,8 @@ const NEW_CHANNELS = [
   'dialogs:listFolder', 'remote:getSettings', 'remote:setSettings', 'remote:setPassword',
   'mcp:listTokens', 'mcp:createToken', 'mcp:revokeToken',
   'workers:list', 'workers:createPairCode', 'workers:remove',
+  'remoteHub:getState', 'remoteHub:enable', 'remoteHub:disable', 'remoteHub:setAllowedFolders', 'remoteHub:pickFolder',
+  'remoteHub:sendSetup', 'remoteHub:markSetupOffered', 'remoteHub:retry', 'remoteHub:useLocal',
 ];
 
 function makeHandlers(db: Database | null = null) {
@@ -53,7 +55,7 @@ describe('handler table', () => {
 
   it('never exposes desktop-only things over HTTP', () => {
     for (const channel of HTTP_CHANNELS) {
-      expect(channel).not.toMatch(/^(shell|dbLocation|remote|mcp|updates):/);
+      expect(channel).not.toMatch(/^(shell|dbLocation|remote|remoteHub|mcp|updates):/);
     }
     expect(HTTP_CHANNELS).not.toContain('dialogs:pickFolder');
     expect(HTTP_CHANNELS).not.toContain('settings:setStartup');
@@ -67,6 +69,13 @@ describe('handler table', () => {
     const known = new Set([...Object.keys(handlers), ...DESKTOP_CHANNELS]);
     expect(used.length).toBeGreaterThan(40);
     for (const channel of used) expect(known.has(channel), channel).toBe(true);
+  });
+
+  it('matches the channels the remote hub page\'s own preload invokes', () => {
+    const preload = fs.readFileSync(path.join(__dirname, '..', 'remoteHub', 'remoteHubPreload.ts'), 'utf8');
+    const used = [...preload.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map((m) => m[1]);
+    expect(used.length).toBeGreaterThan(3);
+    for (const channel of used) expect(DESKTOP_CHANNELS.includes(channel), channel).toBe(true);
   });
 });
 

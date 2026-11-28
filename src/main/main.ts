@@ -31,7 +31,11 @@ import { Hub } from './hub/hub';
 import { InProcessSystem, startInProcessWorker } from './worker/inProcess';
 import { runSettings } from './settings/appSettings';
 import { getLocalWorkerId } from './database/workers';
-import { RemoteSettingsInput, RunResult, UpdateCheckResult } from '../shared/types';
+import { RemoteHubEnableInput, RemoteSettingsInput, RunResult, UpdateCheckResult } from '../shared/types';
+import { RemoteHubManager } from './remoteHub/remoteHubManager';
+import { buildSetupPayload } from './remoteHub/setupExport';
+import { decideNavigation, decideNewWindow } from './remoteHub/navigation';
+import { remoteHubPageUrl } from './remoteHub/localPage';
 
 pinUserDataPath();
 // The desktop sends deleted files to Electron's Recycle Bin / trash (the server uses its own, engine/freedesktopTrash.ts).
@@ -51,6 +55,14 @@ let hub: Hub | null = null;
 let workerSystem: InProcessSystem | null = null;
 let retention: RetentionService | null = null;
 let remote: RemoteController | null = null;
+// "Use a remote hub": the manager owns the setting, the token and the worker that serves the remote hub.
+// While it is on, `localHubActive` is false: no scheduler, no phone server, no MCP, no retention, and no
+// in-process worker. The local database is left alone (it is only read, to offer the one-time setup export).
+let remoteHubManager: RemoteHubManager | null = null;
+let localHubActive = false;
+let remoteWindow: BrowserWindow | null = null;
+let remoteStatusWindow: BrowserWindow | null = null;
+const registeredChannels = new Set<string>();
 let announcedBackground = false;
 let isQuitting = false;
 // Guards against a real race: if a second launch attempt's 'second-instance'
@@ -124,7 +136,7 @@ function loadAppContent(win: BrowserWindow): void {
 }
 
 function createWindow(startHidden = false): void {
-  mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1100,
     height: 750,
     minWidth: 900,
@@ -138,6 +150,7 @@ function createWindow(startHidden = false): void {
     },
     backgroundColor: '#0d47a1',
   });
+  mainWindow = win;
 
   // appInitialized is only true once the backend (db, IPC handlers) is fully
   // ready -- which only happens for a window created *after* startup already
@@ -164,13 +177,18 @@ function createWindow(startHidden = false): void {
   });
 
   mainWindow.on('closed', () => {
-    mainWindow = null;
+    // A window made after this one was destroyed must not be forgotten.
+    if (mainWindow === win) mainWindow = null;
   });
 
   attachContextMenu(mainWindow);
 }
 
 function showWindow(): void {
+  if (remoteHubManager?.isEnabled() && !localHubActive) {
+    void showRemoteMode();
+    return;
+  }
   if (!mainWindow) {
     createWindow(false);
     return;
@@ -239,7 +257,7 @@ function flushAwayDigest(): void {
   }
 }
 
-function notifyRunFinished(kind: string, jobId: number, result: RunResult): void {
+function notifyRunFinished(kind: string, jobId: number, result: RunResult, local = true): void {
   if (isUserAway()) {
     pendingAway.runs += 1;
     pendingAway.jobIds.add(jobId);
@@ -255,7 +273,8 @@ function notifyRunFinished(kind: string, jobId: number, result: RunResult): void
   }
 
   flushAwayDigest();
-  const job = repo.getJob(db!, jobId);
+  // The remote hub's job ids are not this computer's, so its jobs are never looked up here.
+  const job = local && db ? repo.getJob(db, jobId) : null;
   const jobName = job?.name ?? `job #${jobId}`;
   showTrayNotification(`FileShuttle: ${kind} run finished`, `"${jobName}" — ${summarizeResult(result)}`);
 }
@@ -299,6 +318,7 @@ function createTray(): void {
         click: () => {
           isQuitting = true;
           workerSystem?.stop();
+          remoteHubManager?.shutdown();
           retention?.shutdown();
           app.quit();
         },
@@ -378,6 +398,13 @@ function checkForUpdatesNow(): Promise<UpdateCheckResult> {
   });
 }
 
+/** Registers (or re-registers, after the local hub comes back) one IPC channel. */
+function handle(channel: string, listener: Parameters<typeof ipcMain.handle>[1]): void {
+  if (registeredChannels.has(channel)) ipcMain.removeHandler(channel);
+  registeredChannels.add(channel);
+  ipcMain.handle(channel, listener);
+}
+
 function registerIPCHandlers(): void {
   // Everything that works the same from the window and from the phone lives in one table
   // (api/handlers.ts); the HTTP server calls the very same functions.
@@ -388,7 +415,7 @@ function registerIPCHandlers(): void {
     getVersion: () => app.getVersion(),
   });
   for (const [channel, handler] of Object.entries(handlers)) {
-    ipcMain.handle(channel, (_event, ...args) => handler(...args));
+    handle(channel, (_event, ...args) => handler(...args));
   }
 
   // The MCP server lives inside the phone-access server: same loopback bind, same Tailscale rules, its own bearer-token auth.
@@ -418,16 +445,16 @@ function registerIPCHandlers(): void {
 
   // --- Desktop only: these never go over HTTP (see api/channels.ts) ---
 
-  ipcMain.handle('settings:getStartup', () => ({
+  handle('settings:getStartup', () => ({
     supported: isStartupSupported,
     enabled: isStartupEnabled(),
   }));
 
-  ipcMain.handle('settings:setStartup', (_, enabled: boolean) => {
+  handle('settings:setStartup', (_, enabled: boolean) => {
     setStartupEnabled(enabled);
   });
 
-  ipcMain.handle('dialogs:pickFolder', async (_, title: string, startAt?: string) => {
+  handle('dialogs:pickFolder', async (_, title: string, startAt?: string) => {
     if (!mainWindow) return null;
     mainWindow.focus();
     // Open where the field already points (or the closest folder that exists), not at the default location.
@@ -440,15 +467,15 @@ function registerIPCHandlers(): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
-  ipcMain.handle('shell:openPath', (_, filePath: string) => shell.openPath(filePath));
+  handle('shell:openPath', (_, filePath: string) => shell.openPath(filePath));
 
-  ipcMain.handle('dbLocation:get', () => ({
+  handle('dbLocation:get', () => ({
     path: getEffectiveDbPath(),
     isDefault: isUsingDefaultLocation(),
     defaultPath: getDefaultDbPath(),
   }));
 
-  ipcMain.handle('dbLocation:browseExisting', async () => {
+  handle('dbLocation:browseExisting', async () => {
     if (!mainWindow) return null;
     mainWindow.focus();
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -459,7 +486,7 @@ function registerIPCHandlers(): void {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
-  ipcMain.handle('dbLocation:browseNew', async () => {
+  handle('dbLocation:browseNew', async () => {
     if (!mainWindow) return null;
     mainWindow.focus();
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -470,33 +497,340 @@ function registerIPCHandlers(): void {
     return result.canceled ? null : result.filePath ?? null;
   });
 
-  ipcMain.handle('dbLocation:set', (_, newPath: string) => {
+  handle('dbLocation:set', (_, newPath: string) => {
     setDbPath(newPath, db);
     app.relaunch();
     app.exit();
     return { success: true };
   });
 
-  ipcMain.handle('dbLocation:resetToDefault', () => {
+  handle('dbLocation:resetToDefault', () => {
     resetToDefaultDbPath();
     app.relaunch();
     app.exit();
     return { success: true };
   });
 
-  ipcMain.handle('updates:check', () => checkForUpdatesNow());
+  handle('updates:check', () => checkForUpdatesNow());
 
-  ipcMain.handle('remote:getSettings', () => remote!.state());
-  ipcMain.handle('remote:setSettings', (_, input: RemoteSettingsInput) => remote!.setSettings(input ?? {}));
-  ipcMain.handle('remote:setPassword', (_, password: string) => remote!.setPassword(String(password ?? '')));
+  handle('remote:getSettings', () => remote!.state());
+  handle('remote:setSettings', (_, input: RemoteSettingsInput) => remote!.setSettings(input ?? {}));
+  handle('remote:setPassword', (_, password: string) => remote!.setPassword(String(password ?? '')));
 
   // MCP tokens are made and revoked on the PC only (IPC), never over HTTP, so a stolen phone session can't mint one.
-  ipcMain.handle('mcp:listTokens', () => listMcpTokens(db!));
-  ipcMain.handle('mcp:createToken', (_, name: string) => createMcpToken(db!, String(name ?? '')));
-  ipcMain.handle('mcp:revokeToken', (_, name: string) => revokeMcpToken(db!, String(name ?? '')));
+  handle('mcp:listTokens', () => listMcpTokens(db!));
+  handle('mcp:createToken', (_, name: string) => createMcpToken(db!, String(name ?? '')));
+  handle('mcp:revokeToken', (_, name: string) => revokeMcpToken(db!, String(name ?? '')));
 
   // Off unless the user turned it on in Settings.
   void remote.apply();
+}
+
+
+// ---------------------------------------------------------------- the local hub, on and off
+
+/** Opens the database (once) and runs this computer's own hub: retention, the hub, its handlers and the in-process worker. */
+async function startLocalHub(): Promise<void> {
+  if (localHubActive) return;
+  if (!db) {
+    db = await initDatabase();
+    repo.migrateChainsToJobs(db);
+  }
+  const database = db;
+  retention = new RetentionService(database);
+  retention.start();
+  hub = new Hub({ getDb: () => db! });
+  registerIPCHandlers();
+  localHubActive = true;
+  // The local worker says hello and is sent its schedule; applying the first one starts the
+  // scheduler and the watchers and catches up on anything that fired while the app wasn't running.
+  workerSystem = startInProcessWorker(hub, {
+    workerId: getLocalWorkerId(database),
+    appVersion: app.getVersion(),
+    readRunSettings: () => runSettings.read(database),
+    onBackgroundRunFinished: (kind, jobId, result) => notifyRunFinished(kind, jobId, result),
+    heartbeat: true,
+  });
+}
+
+/** Stops everything the local hub runs. The database file is left exactly as it is (it is the backup). */
+async function stopLocalHub(): Promise<void> {
+  localHubActive = false;
+  workerSystem?.stop();
+  workerSystem = null;
+  retention?.shutdown();
+  retention = null;
+  const controller = remote;
+  remote = null;
+  await controller?.shutdown(); // the phone server and the MCP endpoint
+  hub = null;
+}
+
+function getRemoteHubManager(): RemoteHubManager {
+  remoteHubManager ??= new RemoteHubManager({
+    dir: path.join(getUserDataDir(), 'remote-hub'),
+    appVersion: app.getVersion(),
+    localHub: { suspend: stopLocalHub, resume: startLocalHub },
+    buildSetup: () => buildSetupPayload(db!),
+    log: logStartupStep,
+    onBackgroundRunFinished: (kind, jobId, result) => notifyRunFinished(kind, jobId, result, false),
+  });
+  return remoteHubManager;
+}
+
+// ---------------------------------------------------------------- remote mode: windows
+
+function refreshMenu(): void {
+  const remoteMode = !!remoteHubManager?.isEnabled();
+  setupApplicationMenu({ remoteHub: remoteMode ? { open: () => openStatusWindow(false) } : undefined });
+}
+
+/** The hub's own web page, in a window with no preload (it talks to its server over http, like a phone) and locked to the hub's origin. */
+function createRemoteWindow(origin: string, startHidden = false): void {
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 750,
+    minWidth: 900,
+    minHeight: 600,
+    show: !startHidden,
+    icon: path.join(__dirname, '../../../assets/icon.png'),
+    backgroundColor: '#0d47a1',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      // Its own cookie jar, so the hub's sign-in stays across restarts and apart from everything local.
+      partition: 'persist:remote-hub',
+    },
+  });
+  remoteWindow = win;
+  const contents = win.webContents;
+  contents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  contents.session.setPermissionCheckHandler(() => false);
+  contents.setWindowOpenHandler(({ url }) => {
+    const decision = decideNewWindow(origin, url);
+    if (decision.kind === 'external') void shell.openExternal(decision.url);
+    return { action: 'deny' };
+  });
+  const guard = (event: Electron.Event, url: string) => {
+    const decision = decideNavigation(origin, url);
+    if (decision.kind === 'allow') return;
+    event.preventDefault();
+    if (decision.kind === 'external') void shell.openExternal(decision.url);
+  };
+  contents.on('will-navigate', guard);
+  contents.on('will-redirect', guard);
+  contents.on('will-attach-webview', (event) => event.preventDefault());
+  contents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
+    // -3 is a navigation that was cancelled (by us or by the page); anything else on the main frame means the hub is not there.
+    if (isMainFrame && code !== -3 && remoteWindow === win) {
+      openStatusWindow(true);
+      win.destroy();
+    }
+  });
+  win.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
+  win.on('closed', () => {
+    if (remoteWindow === win) remoteWindow = null;
+  });
+  attachContextMenu(win);
+  void win.loadURL(origin);
+}
+
+/** The small local page: status, allowed folders, send setup, and the way back to this computer's own hub. */
+function openStatusWindow(unreachable: boolean): void {
+  if (remoteStatusWindow && !remoteStatusWindow.isDestroyed()) {
+    void remoteStatusWindow.loadURL(remoteHubPageUrl(unreachable));
+    remoteStatusWindow.show();
+    remoteStatusWindow.focus();
+    return;
+  }
+  const win = new BrowserWindow({
+    width: 700,
+    height: 780,
+    icon: path.join(__dirname, '../../../assets/icon.png'),
+    backgroundColor: '#0d47a1',
+    webPreferences: {
+      preload: path.join(__dirname, 'remoteHub', 'remoteHubPreload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+  remoteStatusWindow = win;
+  win.webContents.on('will-navigate', (event) => event.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.on('closed', () => {
+    if (remoteStatusWindow === win) remoteStatusWindow = null;
+  });
+  void win.loadURL(remoteHubPageUrl(unreachable));
+}
+
+function closeRemoteWindows(): void {
+  for (const win of [remoteWindow, remoteStatusWindow]) {
+    if (win && !win.isDestroyed()) win.destroy();
+  }
+  remoteWindow = null;
+  remoteStatusWindow = null;
+}
+
+/** Shows the hub's page if the hub answers, otherwise the local page with Retry and "Use this computer's own hub". */
+async function showRemoteMode(startHidden = false): Promise<void> {
+  if (remoteWindow && !remoteWindow.isDestroyed()) {
+    remoteWindow.show();
+    remoteWindow.focus();
+    return;
+  }
+  const manager = getRemoteHubManager();
+  const origin = manager.hubOrigin();
+  if (!origin || !(await manager.hubReachable())) {
+    if (!startHidden) openStatusWindow(true);
+    return;
+  }
+  if (remoteStatusWindow && !remoteStatusWindow.isDestroyed()) remoteStatusWindow.destroy();
+  createRemoteWindow(origin, startHidden);
+}
+
+function isOwnLocalPage(event: Electron.IpcMainInvokeEvent): boolean {
+  const sender = event.sender;
+  return (
+    (!!mainWindow && !mainWindow.isDestroyed() && sender === mainWindow.webContents) ||
+    (!!remoteStatusWindow && !remoteStatusWindow.isDestroyed() && sender === remoteStatusWindow.webContents)
+  );
+}
+
+async function turnOffRemoteMode(): Promise<void> {
+  const manager = getRemoteHubManager();
+  await manager.disable(); // stops the worker, deletes the token, brings the local hub back
+  closeRemoteWindows();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+  mainWindow = null;
+  createWindow(false);
+  refreshMenu();
+}
+
+/** After switching on: offer, once, to send this computer's jobs and mappings to the hub. */
+async function offerSetupExport(): Promise<void> {
+  const manager = getRemoteHubManager();
+  if (manager.state().setupOffered || !db) return;
+  const payload = buildSetupPayload(db);
+  if (payload.jobs.length === 0 && payload.mappings.length === 0) {
+    manager.markSetupOffered();
+    return;
+  }
+  const parent = remoteWindow && !remoteWindow.isDestroyed() ? remoteWindow : undefined;
+  const options: Electron.MessageBoxOptions = {
+    type: 'question',
+    title: 'Send your setup to the hub?',
+    message: `Send this computer's ${payload.jobs.length} job${payload.jobs.length === 1 ? '' : 's'} and ${payload.mappings.length} mapping${payload.mappings.length === 1 ? '' : 's'} to the hub?`,
+    detail:
+      'They become this machine\'s jobs and mappings on the hub (run history is not sent). Names the hub already has are skipped. Sent jobs are switched off there until you turn them on. Your data here stays as it is, as a backup.\n\nYou can also do this later from View > Remote hub settings.',
+    buttons: ['Send', 'Not now'],
+    defaultId: 0,
+    cancelId: 1,
+  };
+  const answer = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+  manager.markSetupOffered();
+  if (answer.response !== 0) return;
+  try {
+    const report = await manager.sendSetup();
+    const skipped = [...report.mappingsSkipped.map((s) => `mapping "${s.name}"`), ...report.jobsSkipped.map((s) => `job "${s.name}"`)];
+    await dialog.showMessageBox({
+      type: 'info',
+      title: 'Setup sent',
+      message: `Sent ${report.mappingsSent} mapping${report.mappingsSent === 1 ? '' : 's'} and ${report.jobsSent} job${report.jobsSent === 1 ? '' : 's'}.`,
+      detail: skipped.length ? `Skipped: ${skipped.join(', ')}.` : 'Nothing was skipped.',
+    });
+  } catch (err) {
+    await dialog.showMessageBox({ type: 'error', title: 'Could not send the setup', message: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+function registerRemoteHubIpc(): void {
+  const manager = getRemoteHubManager();
+  const trusted = <T,>(fn: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => Promise<T> | T) => // eslint-disable-line @typescript-eslint/no-explicit-any
+    async (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => {
+      if (!isOwnLocalPage(event)) throw new Error('Not allowed from here.');
+      return fn(event, ...args);
+    };
+  handle('remoteHub:getState', trusted(() => manager.state()));
+  handle(
+    'remoteHub:enable',
+    trusted(async (_event, input: RemoteHubEnableInput) => {
+      const state = await manager.enable({
+        hubUrl: String(input?.hubUrl ?? ''),
+        code: String(input?.code ?? ''),
+        name: String(input?.name ?? ''),
+        allowedFolders: Array.isArray(input?.allowedFolders) ? input.allowedFolders.map(String) : [],
+      });
+      // This window has the local interface (and its preload); the hub's page gets a plain window of its own.
+      const old = mainWindow;
+      mainWindow = null;
+      await showRemoteMode();
+      refreshMenu();
+      setTimeout(() => {
+        if (old && !old.isDestroyed()) old.destroy();
+      }, 0);
+      void offerSetupExport();
+      return state;
+    })
+  );
+  handle('remoteHub:disable', trusted(async () => {
+    await turnOffRemoteMode();
+    return manager.state();
+  }));
+  handle('remoteHub:setAllowedFolders', trusted((_event, folders: string[]) => manager.setAllowedFolders(Array.isArray(folders) ? folders.map(String) : [])));
+  handle(
+    'remoteHub:pickFolder',
+    trusted(async (event) => {
+      const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+      const options: Electron.OpenDialogOptions = { title: 'Choose a folder this computer lets the hub use', properties: ['openDirectory'] };
+      const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    })
+  );
+  handle(
+    'remoteHub:sendSetup',
+    trusted(async () => {
+      if (!db) {
+        db = await initDatabase(); // read-only use: only the export reads it
+        repo.migrateChainsToJobs(db);
+      }
+      return manager.sendSetup();
+    })
+  );
+  handle('remoteHub:markSetupOffered', trusted(() => manager.markSetupOffered()));
+  handle(
+    'remoteHub:retry',
+    trusted(async () => {
+      if (!(await manager.hubReachable())) return { problem: 'The hub still cannot be reached.' };
+      await showRemoteMode();
+      return {};
+    })
+  );
+  handle(
+    'remoteHub:useLocal',
+    trusted(async (event) => {
+      const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+      const options: Electron.MessageBoxOptions = {
+        type: 'question',
+        title: "Use this computer's own hub?",
+        message: "Stop using the remote hub and go back to this computer's own jobs?",
+        detail: 'The saved token is deleted and this computer\'s own scheduler, phone access and Claude access come back as they were. Nothing is removed on the hub.',
+        buttons: ['Use this computer\'s own hub', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+      };
+      const answer = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+      if (answer.response !== 0) return { cancelled: true };
+      await turnOffRemoteMode();
+      return {};
+    })
+  );
 }
 
 app.whenReady().then(async () => {
@@ -510,10 +844,30 @@ app.whenReady().then(async () => {
   logStartupStep('main: whenReady fired');
   spawnStartupWatchdog();
 
-  setupApplicationMenu();
+  const manager = getRemoteHubManager();
+  const remoteMode = manager.isEnabled();
+  refreshMenu();
+  registerRemoteHubIpc();
+
+  // Timers are unreliable across sleep, and files may have landed while the PC
+  // was asleep: rebuild the schedules and pick up anything that was missed.
+  // Whichever worker is running (this computer's own, or the one serving a remote hub) is told.
+  powerMonitor.on('resume', () => {
+    workerSystem?.worker.resumeFromSleep();
+    remoteHubManager?.running?.runtime.resumeFromSleep();
+  });
+  app.on('activate', () => {
+    if (!appInitialized) return;
+    if (BrowserWindow.getAllWindows().length === 0 && !manager.isEnabled()) {
+      createWindow(false);
+    } else {
+      showWindow();
+    }
+  });
 
   const configuredDbPath = getConfiguredDbPath();
-  if (configuredDbPath && !fs.existsSync(configuredDbPath)) {
+  // In remote mode this computer's own database is not opened at all, so a missing one is no reason to stop.
+  if (!remoteMode && configuredDbPath && !fs.existsSync(configuredDbPath)) {
     const result = await dialog.showMessageBox({
       type: 'error',
       title: 'Database not found',
@@ -532,6 +886,21 @@ app.whenReady().then(async () => {
   }
 
   const startHidden = process.argv.includes('--start-hidden');
+  if (remoteMode) {
+    // Launch goes straight to the hub's page. No local database, scheduler, phone server, MCP or retention starts.
+    logStartupStep('main: remote hub mode');
+    createTray();
+    appInitialized = true;
+    logStartupStep('main: startup complete');
+    try {
+      await manager.resumeAtLaunch();
+    } catch (err) {
+      logStartupStep(`main: remote hub worker did not start: ${err instanceof Error ? err.message : err}`);
+    }
+    await showRemoteMode(startHidden);
+    setupAutoUpdater();
+    return;
+  }
   // Create the window (showing the loading screen) before the potentially
   // slow work below, so a stalled startup shows *something* instead of
   // nothing at all.
@@ -543,50 +912,15 @@ app.whenReady().then(async () => {
 
   try {
     logStep('main: calling initDatabase()');
-    db = await initDatabase();
-    logStep('main: initDatabase() returned, calling migrateChainsToJobs()');
-    repo.migrateChainsToJobs(db);
-    logStep('main: migrateChainsToJobs() done, starting retention service');
-
-    retention = new RetentionService(db);
-    retention.start();
-    logStep('main: retention started, constructing scheduler');
-
-    hub = new Hub({ getDb: () => db! });
-    logStep('main: hub constructed, registering IPC handlers');
-
-    registerIPCHandlers();
-    logStep('main: IPC handlers registered, loading app content');
+    await startLocalHub();
+    logStep('main: local hub started, loading app content');
     if (mainWindow) loadAppContent(mainWindow);
     createTray();
     appInitialized = true;
     logStep('main: startup complete');
     announceDatabaseRecovery();
-    // The local worker says hello and is sent its schedule; applying the first one starts the
-    // scheduler and the watchers and catches up on anything that fired while the app wasn't running.
-    const database = db;
-    workerSystem = startInProcessWorker(hub, {
-      workerId: getLocalWorkerId(database),
-      appVersion: app.getVersion(),
-      readRunSettings: () => runSettings.read(database),
-      onBackgroundRunFinished: (kind, jobId, result) => notifyRunFinished(kind, jobId, result),
-      heartbeat: true,
-    });
     setupAutoUpdater();
 
-    // Timers are unreliable across sleep, and files may have landed while the PC
-    // was asleep: rebuild the schedules and pick up anything that was missed.
-    powerMonitor.on('resume', () => {
-      workerSystem?.worker.resumeFromSleep();
-    });
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow(false);
-      } else {
-        showWindow();
-      }
-    });
   } catch (err) {
     const message = err instanceof Error ? err.stack ?? err.message : String(err);
     logStep(`main: startup failed: ${message}`);
@@ -601,6 +935,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   isQuitting = true;
   workerSystem?.stop();
+  remoteHubManager?.shutdown();
   retention?.shutdown();
   void remote?.shutdown();
   if (db) flushDatabase(db);

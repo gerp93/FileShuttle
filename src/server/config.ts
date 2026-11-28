@@ -1,4 +1,5 @@
 import * as net from 'net';
+import * as os from 'os';
 import * as path from 'path';
 import { validatePort } from '../main/remote/remoteSettings';
 import { DEFAULT_REMOTE_PORT } from '../shared/types';
@@ -38,9 +39,27 @@ export function isLoopbackHost(host: string): boolean {
   return false;
 }
 
-function absolute(name: string, value: string): string {
-  if (!path.isAbsolute(value)) throw new ConfigError(`${name} must be an absolute path (got "${value}").`);
-  return path.normalize(value);
+function absolute(name: string, value: string, p: typeof path = path): string {
+  if (!p.isAbsolute(value)) throw new ConfigError(`${name} must be an absolute path (got "${value}").`);
+  return p.normalize(value);
+}
+
+/**
+ * Where the server keeps its data and finds its web UI when nothing is set. On Linux these are the
+ * .deb's fixed paths. On Windows there is no /var/lib: the data lives in the user's local app data and the
+ * web UI is the "web" folder beside the .exe (that is how the Windows zip is laid out).
+ */
+export function defaultPaths(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+  execPath: string = process.execPath,
+  home: string = os.homedir()
+): { dataDir: string; webDir: string } {
+  if (platform === 'win32') {
+    const local = env.LOCALAPPDATA?.trim() || path.win32.join(home, 'AppData', 'Local');
+    return { dataDir: path.win32.join(local, 'FileShuttleServer'), webDir: path.win32.join(path.win32.dirname(execPath), 'web') };
+  }
+  return { dataDir: DEFAULT_DATA_DIR, webDir: DEFAULT_WEB_DIR };
 }
 
 /**
@@ -48,12 +67,18 @@ function absolute(name: string, value: string): string {
  * The server holds the power to move and delete files, so it will not listen on anything but a loopback
  * address; reach it from other machines with `tailscale serve` (never Funnel).
  */
-export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
-  const dataDir = absolute('FILESHUTTLE_SERVER_DATA_DIR', env.FILESHUTTLE_SERVER_DATA_DIR?.trim() || DEFAULT_DATA_DIR);
-  const webDir = absolute('FILESHUTTLE_SERVER_WEB_DIR', env.FILESHUTTLE_SERVER_WEB_DIR?.trim() || DEFAULT_WEB_DIR);
+export function parseServerConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  execPath: string = process.execPath
+): ServerConfig {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const defaults = defaultPaths(env, platform, execPath);
+  const dataDir = absolute('FILESHUTTLE_SERVER_DATA_DIR', env.FILESHUTTLE_SERVER_DATA_DIR?.trim() || defaults.dataDir, p);
+  const webDir = absolute('FILESHUTTLE_SERVER_WEB_DIR', env.FILESHUTTLE_SERVER_WEB_DIR?.trim() || defaults.webDir, p);
   const trashDir = env.FILESHUTTLE_SERVER_TRASH_DIR?.trim()
-    ? absolute('FILESHUTTLE_SERVER_TRASH_DIR', env.FILESHUTTLE_SERVER_TRASH_DIR.trim())
-    : path.join(dataDir, 'Trash');
+    ? absolute('FILESHUTTLE_SERVER_TRASH_DIR', env.FILESHUTTLE_SERVER_TRASH_DIR.trim(), p)
+    : p.join(dataDir, 'Trash');
 
   const portText = env.FILESHUTTLE_SERVER_PORT?.trim();
   const port = portText ? Number(portText) : DEFAULT_REMOTE_PORT;

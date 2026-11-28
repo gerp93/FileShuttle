@@ -10,6 +10,7 @@ import { createPairingCode } from '../main/hub/pairing';
 import { loadWorkerConfig, WorkerConfigError } from '../main/worker/workerConfig';
 import { HubUrlError } from '../main/worker/hubClient';
 import { pairWorker, startWorker } from './workerMode';
+import { installLogon, LogonError, uninstallLogon } from './logon';
 
 export const USAGE = `FileShuttle server ${APP_VERSION}
 
@@ -20,6 +21,8 @@ Usage: fileshuttle-server <command>
   worker         run this machine as a worker for a hub it was paired with
   worker pair --hub <address> --code <code> [--name <name>]
                  pair this machine with a hub (the code is made in the hub's Settings > Machines, or with pair-code)
+  worker install-logon     (Windows) start the worker when you sign in, as you, hidden, no admin needed
+  worker uninstall-logon   (Windows) stop starting it at sign-in
   pair-code      make a one-time code (valid 10 minutes) for pairing a worker; run it on the hub
   set-password   set the password for the web UI (typed twice, or one line on stdin)
   mcp-token create <name>   make an access token for the MCP server (shown once)
@@ -272,6 +275,15 @@ export async function runCli(args: string[]): Promise<number> {
       }
       case 'worker': {
         if (args[1] === 'pair') return await workerPairCommand(args.slice(2));
+        if ((args[1] === 'install-logon' || args[1] === 'uninstall-logon') && args.length === 2) {
+          if (args[1] === 'install-logon') {
+            const exe = await installLogon();
+            console.log(`The worker will start at sign-in as you, with no window: ${exe} worker\nRemove it with: fileshuttle-server worker uninstall-logon`);
+          } else {
+            console.log((await uninstallLogon()) ? 'The worker no longer starts at sign-in.' : 'It was not set to start at sign-in.');
+          }
+          return 0;
+        }
         if (args.length > 1) {
           console.error(USAGE);
           return 2;
@@ -293,7 +305,7 @@ export async function runCli(args: string[]): Promise<number> {
         return 2;
     }
   } catch (err) {
-    if (err instanceof WorkerConfigError || err instanceof HubUrlError) {
+    if (err instanceof WorkerConfigError || err instanceof HubUrlError || err instanceof LogonError) {
       console.error(err.message);
       return 2;
     }

@@ -185,6 +185,15 @@ export function createWebApi(): FileShuttleAPI {
       createPairCode: () => rpc('workers:createPairCode'),
       remove: (workerId) => rpc('workers:remove', workerId),
     },
+    remoteHub: {
+      getState: () => unavailable(),
+      enable: () => unavailable(),
+      disable: () => unavailable(),
+      setAllowedFolders: () => unavailable(),
+      pickFolder: () => unavailable(),
+      sendSetup: () => unavailable(),
+      markSetupOffered: () => unavailable(),
+    },
     mcp: {
       listTokens: () => unavailable(),
       createToken: () => unavailable(),

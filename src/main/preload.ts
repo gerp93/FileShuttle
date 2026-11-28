@@ -17,6 +17,9 @@ import {
   McpTokenInfo,
   PairCodeInfo,
   WorkerInfo,
+  RemoteHubEnableInput,
+  RemoteHubSetupReport,
+  RemoteHubState,
   RemoteSettingsInput,
   RemoteState,
   RunAllSummary,
@@ -112,6 +115,16 @@ export interface FileShuttleAPI {
     createPairCode: () => Promise<PairCodeInfo>;
     remove: (workerId: string) => Promise<boolean>;
   };
+  /** "Use a remote hub" (Settings, desktop only). */
+  remoteHub: {
+    getState: () => Promise<RemoteHubState>;
+    enable: (input: RemoteHubEnableInput) => Promise<RemoteHubState>;
+    disable: () => Promise<RemoteHubState>;
+    setAllowedFolders: (folders: string[]) => Promise<RemoteHubState>;
+    pickFolder: () => Promise<string | null>;
+    sendSetup: () => Promise<RemoteHubSetupReport>;
+    markSetupOffered: () => Promise<void>;
+  };
   mcp: {
     listTokens: () => Promise<McpTokenInfo[]>;
     createToken: (name: string) => Promise<{ name: string; token: string }>;
@@ -202,6 +215,15 @@ const api: FileShuttleAPI = {
     list: () => ipcRenderer.invoke('workers:list'),
     createPairCode: () => ipcRenderer.invoke('workers:createPairCode'),
     remove: (workerId) => ipcRenderer.invoke('workers:remove', workerId),
+  },
+  remoteHub: {
+    getState: () => ipcRenderer.invoke('remoteHub:getState'),
+    enable: (input) => ipcRenderer.invoke('remoteHub:enable', input),
+    disable: () => ipcRenderer.invoke('remoteHub:disable'),
+    setAllowedFolders: (folders) => ipcRenderer.invoke('remoteHub:setAllowedFolders', folders),
+    pickFolder: () => ipcRenderer.invoke('remoteHub:pickFolder'),
+    sendSetup: () => ipcRenderer.invoke('remoteHub:sendSetup'),
+    markSetupOffered: () => ipcRenderer.invoke('remoteHub:markSetupOffered'),
   },
   mcp: {
     listTokens: () => ipcRenderer.invoke('mcp:listTokens'),

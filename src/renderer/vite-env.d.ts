@@ -18,6 +18,9 @@ import type {
   McpTokenInfo,
   PairCodeInfo,
   WorkerInfo,
+  RemoteHubEnableInput,
+  RemoteHubSetupReport,
+  RemoteHubState,
   RemoteSettingsInput,
   RemoteState,
   RunAllSummary,
@@ -112,6 +115,15 @@ interface FileShuttleAPI {
     list: () => Promise<WorkerInfo[]>;
     createPairCode: () => Promise<PairCodeInfo>;
     remove: (workerId: string) => Promise<boolean>;
+  };
+  remoteHub: {
+    getState: () => Promise<RemoteHubState>;
+    enable: (input: RemoteHubEnableInput) => Promise<RemoteHubState>;
+    disable: () => Promise<RemoteHubState>;
+    setAllowedFolders: (folders: string[]) => Promise<RemoteHubState>;
+    pickFolder: () => Promise<string | null>;
+    sendSetup: () => Promise<RemoteHubSetupReport>;
+    markSetupOffered: () => Promise<void>;
   };
   mcp: {
     listTokens: () => Promise<McpTokenInfo[]>;

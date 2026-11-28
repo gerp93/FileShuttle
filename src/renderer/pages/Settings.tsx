@@ -12,6 +12,7 @@ import { FletThemeId, getThemeList } from '../utils/themes';
 import { isWebMode } from '../utils/platform';
 import RemoteAccessSection from '../components/RemoteAccessSection';
 import McpAccessSection from '../components/McpAccessSection';
+import RemoteHubSection from '../components/RemoteHubSection';
 import MachinesSection from '../components/MachinesSection';
 
 export default function Settings() {
@@ -270,6 +271,10 @@ export default function Settings() {
           <hr className="divider" />
 
           <McpAccessSection />
+
+          <hr className="divider" />
+
+          <RemoteHubSection />
         </>
       )}
 

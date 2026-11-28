@@ -452,3 +452,37 @@ export function validateUnzipLimits(limits: UnzipLimitsSetting): string | null {
   }
   return null;
 }
+
+// ---------------------------------------------------------------- desktop "Use a remote hub"
+
+/** What Settings shows about this computer's remote-hub mode. */
+export interface RemoteHubState {
+  enabled: boolean;
+  /** The hub's address (kept after turning the mode off, as a convenience for next time). */
+  hubUrl: string;
+  /** The name this computer is listed under on the hub. */
+  name: string;
+  /** Folders this computer lets the hub touch. Empty means every folder is refused. */
+  allowedFolders: string[];
+  /** The worker is connected to the hub right now. */
+  connected: boolean;
+  /** The sentence to show when something is wrong (not connected, refused). */
+  problem: string | null;
+  /** True once the one-time offer to send this computer's setup has been answered or used. */
+  setupOffered: boolean;
+}
+
+export interface RemoteHubEnableInput {
+  hubUrl: string;
+  /** The one-time pairing code made on the hub (Settings > Machines). */
+  code: string;
+  name: string;
+  allowedFolders: string[];
+}
+
+export interface RemoteHubSetupReport {
+  mappingsSent: number;
+  mappingsSkipped: { name: string; reason: string }[];
+  jobsSent: number;
+  jobsSkipped: { name: string; reason: string }[];
+}

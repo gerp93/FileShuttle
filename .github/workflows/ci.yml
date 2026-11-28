@@ -53,6 +53,10 @@ jobs:
         deploy/fileshuttle-server.env /etc/fileshuttle-server/server.env 0640
       conffiles: /etc/fileshuttle-server/server.env
       scripts_dir: deploy/debian
+      windows: true
+      windows_exe_name: fileshuttle-server
+      windows_files: |
+        dist/renderer web
       publish: false
     # The reusable workflow declares contents: write, and a caller may not grant
     # less than a called workflow asks for (the run fails to start). publish is

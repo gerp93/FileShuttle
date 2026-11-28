@@ -80,3 +80,18 @@ linuxOnly('userArgs', () => {
     }
   });
 });
+
+describe('parseServerConfig on Windows', () => {
+  it('defaults the web dir beside the exe and the data dir to local app data', () => {
+    const c = parseServerConfig({ LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' }, 'win32', 'C:\\Tools\\FileShuttle\\fileshuttle-server.exe');
+    expect(c.webDir).toBe('C:\\Tools\\FileShuttle\\web');
+    expect(c.dataDir).toBe('C:\\Users\\me\\AppData\\Local\\FileShuttleServer');
+    expect(c.trashDir).toBe('C:\\Users\\me\\AppData\\Local\\FileShuttleServer\\Trash');
+  });
+
+  it('accepts Windows absolute paths and refuses relative ones', () => {
+    const c = parseServerConfig({ FILESHUTTLE_SERVER_DATA_DIR: 'D:\\fs', FILESHUTTLE_SERVER_WEB_DIR: 'D:\\web' }, 'win32', 'C:\\x\\a.exe');
+    expect(c.dataDir).toBe('D:\\fs');
+    expect(() => parseServerConfig({ FILESHUTTLE_SERVER_DATA_DIR: 'fs' }, 'win32', 'C:\\x\\a.exe')).toThrow(ConfigError);
+  });
+});

@@ -241,6 +241,62 @@ Settings (environment, then `worker.json` in the data folder; default
 - With a Tailscale allowed-logins list on the hub, the worker machine's login must be
   on it.
 
+### Windows worker setup
+
+The release zip `fileshuttle-server_<version>_windows-x64.zip` holds `fileshuttle-server.exe` and a
+`web` folder beside it. Unzip it somewhere you keep (for example `C:\Tools\FileShuttle`), then in
+PowerShell (no admin rights needed):
+
+```powershell
+# 1. Pair (make the code on the hub: Settings > Machines > Pair a Machine)
+.\fileshuttle-server.exe worker pair --hub https://<hub address> --code XXXX-XXXX --name "Office PC"
+
+# 2. Allow folders (empty means the worker refuses everything). Separate folders with ";".
+setx FILESHUTTLE_WORKER_ALLOWED_FOLDERS "D:\Inbox;D:\Archive"
+#    or put {"allowedFolders": ["D:\\Inbox", "D:\\Archive"]} in %LOCALAPPDATA%\FileShuttleWorker\worker.json
+
+# 3. Run it by hand to try it (Ctrl+C stops it)
+.\fileshuttle-server.exe worker
+
+# 4. Start it every time you sign in (as you, hidden, not a service)
+.\fileshuttle-server.exe worker install-logon
+# and to stop doing that
+.\fileshuttle-server.exe worker uninstall-logon
+```
+
+- **How start at logon works.** `install-logon` writes one value, `FileShuttleWorker`, under
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` with `reg add` (an argv, no shell);
+  `uninstall-logon` runs `reg delete`. It is a per-user Run key, not a Task Scheduler task and not a
+  service: it needs no admin rights, belongs to you alone, and the worker runs as you. Run it
+  from the `.exe` itself, and move the folder only before installing (the key stores the path).
+- **Deletes are refused.** The Windows worker has no Recycle Bin access (that needs native code), so a
+  step that would delete a file fails and leaves the file where it is. It never deletes outright.
+  Copy and move work normally; use the desktop app on that PC if you need Recycle Bin deletes.
+- **Data** is in `%LOCALAPPDATA%\FileShuttleWorker` (token encrypted with DPAPI). A hub run on Windows
+  keeps its data in `%LOCALAPPDATA%\FileShuttleServer` and serves the `web` folder beside the `.exe`.
+
+### Use a remote hub (desktop app)
+
+On the desktop app, Settings > Use a remote hub turns this PC into a worker of a hub elsewhere
+(for example the always-on home server) and shows the hub's web page in the main window.
+
+1. On the hub make a pairing code (Settings > Machines), then fill in the hub address (`https://`, or
+   `http://` for `127.0.0.1` only), the code and a machine name, and turn it on.
+2. This PC then pairs (the token is kept like the server worker's: DPAPI on Windows), **turns its own hub
+   off** (no local scheduler, no local remote server, MCP off) and runs a worker for the remote hub.
+3. **Allowed folders** for that worker are edited in the same section. An empty list refuses everything,
+   and the section says so.
+4. The window loads the hub's page. It may only navigate within that exact origin; any other link
+   opens in your browser (http/https only). The hub's page gets no preload bridge. While in remote mode,
+   View > Remote hub settings... (Ctrl+Shift+H) opens a local page to change the setting. If the hub
+   cannot be reached at launch you get a local page with Retry and "Use this computer's own hub".
+5. **Send existing setup.** Once, you are offered to send this computer's jobs and mappings (not run
+   history) to the hub. Mappings become this machine's mappings; names that already exist are skipped;
+   the report lists what was sent and skipped. Imported jobs arrive **switched off** so nothing runs twice;
+   a job whose mapping was skipped is skipped. The local database is untouched as a backup.
+6. Turning it off deletes the stored token and brings the local hub back as it was. Nothing is revoked on
+   the hub (remove the machine there in Settings > Machines).
+
 Build it with `npm run build:server` (one file, `dist/server/fileshuttle-server.cjs`,
 no `electron` in its imports; a test enforces that).
 

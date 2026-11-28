@@ -55,5 +55,9 @@ jobs:
         deploy/fileshuttle-server.env /etc/fileshuttle-server/server.env 0640
       conffiles: /etc/fileshuttle-server/server.env
       scripts_dir: deploy/debian
+      windows: true
+      windows_exe_name: fileshuttle-server
+      windows_files: |
+        dist/renderer web
     permissions:
       contents: write

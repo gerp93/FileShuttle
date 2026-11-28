@@ -2,6 +2,7 @@ import type { Database } from '../database/sqlite';
 import { HubToWorker, PROTOCOL_VERSION, WORKER_OFFLINE_AFTER_MS, WORKER_TO_HUB_TYPES, WorkerToHub } from '../../shared/workerProtocol';
 import type { WebSocketConnection } from '../net/webSocket';
 import type { Hub, HubEndpoint } from './hub';
+import { ImportReport, importSetup, parseSetupPayload } from './importSetup';
 import { BAD_CODE_MESSAGE, redeemPairingCode, verifyWorkerToken } from './pairing';
 
 /**
@@ -84,6 +85,7 @@ class SocketEndpoint implements HubEndpoint {
 export class WorkerGateway {
   private readonly connections = new Set<WebSocketConnection>();
   private readonly log: (message: string) => void;
+  private stopped = false;
 
   constructor(private readonly opts: GatewayOptions) {
     this.log = opts.log ?? (() => undefined);
@@ -100,6 +102,32 @@ export class WorkerGateway {
     if (!result.ok) return { status: 401, body: { ok: false, error: BAD_CODE_MESSAGE } };
     this.log(`paired machine "${result.worker.name}"`);
     return { status: 200, body: { ok: true, workerId: result.worker.id, name: result.worker.name, token: result.token } };
+  };
+
+  /**
+   * POST /api/workers/import-setup: a paired machine sends its own jobs and mappings once. The worker
+   * id and token prove who it is (the same check as the WebSocket's hello); the setup lands on that
+   * machine and no other.
+   */
+  importSetup = (workerId: unknown, token: unknown, body: unknown): { status: number; body: unknown } => {
+    if (typeof workerId !== 'string' || typeof token !== 'string' || !workerId || !token || workerId.length > 100 || token.length > 200) {
+      return { status: 401, body: { ok: false, error: NOT_ACCEPTED_MESSAGE } };
+    }
+    if (!verifyWorkerToken(this.opts.getDb(), workerId, token)) {
+      return { status: 401, body: { ok: false, error: NOT_ACCEPTED_MESSAGE } };
+    }
+    const payload = parseSetupPayload(body);
+    if (typeof payload === 'string') return { status: 400, body: { ok: false, error: payload } };
+    let report: ImportReport;
+    try {
+      report = importSetup(this.opts.getDb(), workerId, payload);
+    } catch (err) {
+      return { status: 400, body: { ok: false, error: err instanceof Error ? err.message : 'The setup could not be saved.' } };
+    }
+    // The new jobs reach the worker's schedule right away.
+    this.opts.hub.syncSchedules();
+    this.log(`machine ${workerId} sent its setup: ${report.mappingsSent} mappings, ${report.jobsSent} jobs`);
+    return { status: 200, body: report };
   };
 
   /** A worker's WebSocket, just upgraded. */
@@ -144,7 +172,8 @@ export class WorkerGateway {
       clearTimeout(helloTimer);
       clearInterval(pingTimer);
       this.connections.delete(connection);
-      if (endpoint && workerId) this.opts.hub.detachWorker(workerId, endpoint);
+      // After stop() the database may already be closed; nothing is left to tell.
+      if (endpoint && workerId && !this.stopped) this.opts.hub.detachWorker(workerId, endpoint);
     });
   };
 
@@ -198,6 +227,7 @@ export class WorkerGateway {
 
   /** Closes every worker connection (the server is stopping). */
   stop(): void {
+    this.stopped = true;
     for (const connection of [...this.connections]) connection.close(1001, 'The hub is shutting down.');
   }
 }
