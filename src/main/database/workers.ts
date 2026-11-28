@@ -4,11 +4,11 @@ import { Database, transaction } from './sqlite';
 import { queryAll, queryOne, run, toInt } from './dbHelpers';
 
 /**
- * A worker is a machine that actually moves files. Today there is exactly one, the `local`
- * worker (this PC), and it runs inside the same process as the hub. The rows exist so the
- * data model is ready for more: every mapping, job and run belongs to one worker.
+ * A worker is a machine that actually moves files. The `local` worker runs inside the same
+ * process as the hub; a `remote` one is another computer that was paired with the hub (see
+ * workerAccess.ts) and connects to it over the network. Every mapping, job and run belongs to one worker.
  */
-export type WorkerKind = 'local';
+export type WorkerKind = 'local' | 'remote';
 
 export interface WorkerRecord {
   id: string;
@@ -22,6 +22,8 @@ export interface WorkerRecord {
   scheduleAckedVersion: number;
   lastSeenAt: string | null;
   createdAt: string;
+  /** A remote worker that holds a token (false once the token is revoked, and always for the local one). */
+  hasToken: boolean;
 }
 
 function rowToWorker(row: Record<string, unknown>): WorkerRecord {
@@ -35,6 +37,7 @@ function rowToWorker(row: Record<string, unknown>): WorkerRecord {
     scheduleAckedVersion: Number(row.schedule_acked_version),
     lastSeenAt: row.last_seen_at ? String(row.last_seen_at) : null,
     createdAt: String(row.created_at),
+    hasToken: row.token_hash != null && String(row.token_hash) !== '',
   };
 }
 
@@ -115,4 +118,16 @@ export function touchWorker(db: Database, workerId: string, whenIso: string): vo
 export function ownerOf(db: Database, table: 'mappings' | 'jobs', id: number): string | null {
   const row = queryOne(db, `SELECT worker_id FROM ${table} WHERE id = ?`, [id]);
   return row?.worker_id ? String(row.worker_id) : null;
+}
+
+/** Whether a worker should be shown as online: it is connected and the hub has heard from it recently. */
+export function isWorkerOnline(
+  worker: Pick<WorkerRecord, 'lastSeenAt'>,
+  connected: boolean,
+  nowMs: number,
+  offlineAfterMs: number
+): boolean {
+  if (!connected || !worker.lastSeenAt) return false;
+  const seen = Date.parse(worker.lastSeenAt);
+  return Number.isFinite(seen) && nowMs - seen <= offlineAfterMs;
 }

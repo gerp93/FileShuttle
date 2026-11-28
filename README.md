@@ -160,7 +160,8 @@ fileshuttle-server --version
 fileshuttle-server set-password   # asks twice (hidden); or pipe the password on stdin
 fileshuttle-server all            # hub + a worker in this process (what the service runs)
 fileshuttle-server hub            # hub only
-fileshuttle-server worker         # not available yet (phase 5): exits with status 2
+fileshuttle-server worker         # a worker for a hub on another computer (see "Another computer as a worker")
+fileshuttle-server workers list   # on the hub: the computers it knows, online or offline
 ```
 
 - **Loopback only.** It listens on `127.0.0.1:8765` and refuses to start on any
@@ -194,6 +195,52 @@ fileshuttle-server worker         # not available yet (phase 5): exits with stat
 - Removing the package keeps the data; purging deletes the database and settings
   (and the user), but not files still in the trash.
 
+### Another computer as a worker
+
+The hub holds the definitions (mappings, jobs, schedules) and the history; a **worker** is a
+computer that runs jobs against *its own* folders. A hub-only or `all` server can have any number of
+paired computers besides its own, so one house server can run your jobs on your PC. The worker
+always connects **out** to the hub's `tailscale serve` https address; nothing listens on the worker,
+and the hub still listens on `127.0.0.1` only (never Funnel).
+
+Pair a computer (once):
+
+```bash
+# on the hub: a one-time code for a computer you name (works once, expires in 15 minutes)
+sudo -u fileshuttle-server fileshuttle-server workers pair "KVG PC"
+
+# on that computer: pair it, then run it (the worker is the same program, a different command)
+fileshuttle-server worker pair https://<hub>.<tailnet>.ts.net ABCDE-FGHJK
+fileshuttle-server worker
+```
+
+- **Pairing and tokens.** The code is traded for a *worker token*: 32 random bytes, shown to the worker once. The hub keeps only
+  a SHA-256 hash (a copy of its database holds nothing usable), and wrong codes are rate-limited. The worker keeps the token in
+  `~/.config/fileshuttle-worker/worker.json` (mode 0600; set `FILESHUTTLE_WORKER_DIR` to move it) and sends it as a bearer token
+  over https; it is never written to a log.
+- **Revoking.** `fileshuttle-server workers revoke "KVG PC"` cuts the computer off within seconds (an open connection is dropped,
+  the next request is refused); the worker stops, forgets its schedule and exits with status 3. Its mappings, jobs and history stay on
+  the hub, and `workers repair "KVG PC"` makes a new code for the same computer.
+- **A computer that is offline.** The hub shows a computer as offline when its connection is gone or it has been silent for 90
+  seconds (a worker sends a heartbeat every 30), and refuses commands for it (run, preview, folder browsing) instead of queueing them.
+  The worker itself keeps going: it stores the last schedule the hub sent, so scheduled and watched jobs keep running (and catch up after a
+  restart) with the hub unreachable, and everything that finishes meanwhile waits in an **outbox** on disk. When the connection is back
+  the outbox is delivered in order. Delivery is at-least-once and safe to repeat: each step has a `run_uid` and is stored once; a job's
+  "last run" only moves forward. A run you started from the hub waits up to 10 minutes for a worker that dropped off to report back. The outbox keeps the newest
+  20,000 reports.
+- **Not in the pages yet.** The hub's web UI does not yet have a computer picker: until it does, a mapping or job is put on a
+  computer through the API (`mappings:create` and `jobs:create` take the computer's id as a second argument; `workers:list` lists the ids).
+- **Settings.** The hub's run settings (overwrite backup, unzip limits) are sent to every worker along with its schedule. A job's steps
+  all run on the computer the job belongs to.
+- **Trust.** Pairing makes the hub able to move, copy and delete files in any folder the worker's user can reach, so pair only
+  your own hub, and run the worker as a user that can reach only what jobs need. If the hub has an *Allowed Tailscale logins* list,
+  the worker's computer has to be signed in to Tailscale as one of those logins, like a phone. Anyone on the tailnet who can reach the hub
+  can try pairing codes; five wrong tries from one place (twenty overall) block pairing for 15 minutes, and a code is ten characters
+  from a 32-letter alphabet, so guessing one inside its 15 minutes is not realistic.
+- **Version.** The two sides must speak the same worker protocol version; a mismatch is refused with a clear message.
+- To run a worker as a service on Linux, use a normal user's systemd unit that runs `fileshuttle-server worker` with `Restart=on-failure`
+  (status 3 means the hub revoked it, and is not restarted).
+
 Build it with `npm run build:server` (one file, `dist/server/fileshuttle-server.cjs`,
 no `electron` in its imports; a test enforces that).
 
@@ -223,10 +270,11 @@ FileShuttle moves and deletes real files, so it is conservative by default:
   the existing file as `fileshuttle.db.pre-native-sqlite` beside it (never
   deleted by the app). An unreadable database is quarantined and, if an older
   `.bak` exists, restored from it.
-- **Hub and worker, in one process.** Inside the app, a *hub* (database, window,
+- **Hub and worker.** A *hub* (database, window,
   phone page) talks to a *worker* (scheduler, folder watchers, file mover) with
-  JSON messages (`src/shared/workerProtocol.ts`) over an in-process link; nothing
-  looks different from outside. Every mapping, job and run belongs to a worker
+  JSON messages (`src/shared/workerProtocol.ts`). In the desktop app both live in one
+  process over an in-process link, and nothing looks different from outside; a headless
+  hub also accepts workers on other computers over the network (see "Another computer as a worker"). Every mapping, job and run belongs to a worker
   (the `local` one, named after this computer), each run has a `run_uid` so a
   report delivered twice is stored once, and a worker's `schedule_version` goes
   up whenever its schedule changes. The first launch of this version keeps a copy

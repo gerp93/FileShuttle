@@ -10,6 +10,7 @@ import { getLocalWorkerId } from '../main/database/workers';
 import { createHandlers } from '../main/api/handlers';
 import { HTTP_CHANNELS } from '../main/api/channels';
 import { Hub } from '../main/hub/hub';
+import { createWorkerGateway } from '../main/hub/workerGateway';
 import { InProcessSystem, startInProcessWorker } from '../main/worker/inProcess';
 import { RemoteServer } from '../main/remote/server';
 import { callLogPath, createMcpHandler } from '../main/mcp/mcpEndpoint';
@@ -73,12 +74,16 @@ export async function startServer(
     getLogPath: () => callLogPath(config.dataDir),
   });
 
+  // The door for remote workers (paired computers that connect out to this hub).
+  const gateway = createWorkerGateway({ getDb: () => db, hub, log: (message) => log(`workers: ${message}`) });
+
   const web = new RemoteServer({
     port: config.port,
     host: config.host,
     staticDir: config.webDir,
     handlers,
     mcp,
+    workers: gateway.handler,
     allowedChannels: HTTP_CHANNELS,
     isPasswordSet: () => getRemoteSettings(db).hasPassword,
     checkPassword: (password) => checkRemotePassword(db, password),
@@ -89,6 +94,7 @@ export async function startServer(
   try {
     port = await web.start();
   } catch (err) {
+    gateway.shutdown();
     retention.shutdown();
     flushDatabase(db);
     db.close();
@@ -121,6 +127,7 @@ export async function startServer(
       if (stopped) return;
       stopped = true;
       worker?.stop();
+      gateway.shutdown();
       retention.shutdown();
       await web.stop();
       flushDatabase(db);

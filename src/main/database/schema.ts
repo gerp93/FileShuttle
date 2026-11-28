@@ -13,6 +13,16 @@ let currentDbPath: string | null = null;
 let recoveryNotice: string | null = null;
 
 export const STATEMENTS = [
+  // One-time codes that let a computer become a worker (see database/workerAccess.ts). Only a hash
+  // of the code is kept; a row is deleted when it is used or expires. worker_id is set when the code
+  // re-pairs a worker whose token was revoked (no foreign key: this runs before the workers table exists).
+  `CREATE TABLE IF NOT EXISTS worker_pairings (
+    code_hash   TEXT PRIMARY KEY,
+    name        TEXT NOT NULL COLLATE NOCASE,
+    worker_id   TEXT,
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+  )`,
   // Access tokens for the MCP server. Only a SHA-256 hash of each token is kept, never the token.
   `CREATE TABLE IF NOT EXISTS mcp_tokens (
     name          TEXT PRIMARY KEY COLLATE NOCASE,

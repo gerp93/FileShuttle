@@ -583,7 +583,12 @@ export function updateJob(db: Database, jobId: number, input: UpdateJobInput): v
  * it is run state the worker produced itself, and resending the schedule would reset its timers.
  */
 export function setJobLastRun(db: Database, jobId: number, whenIso: string): void {
-  run(db, 'UPDATE jobs SET last_run_at = ? WHERE id = ?', [whenIso, jobId]);
+  // Only forward: a report that was held in a worker's outbox must not move "last run" back.
+  run(db, 'UPDATE jobs SET last_run_at = ? WHERE id = ? AND (last_run_at IS NULL OR last_run_at < ?)', [
+    whenIso,
+    jobId,
+    whenIso,
+  ]);
 }
 
 export function deleteJob(db: Database, jobId: number): void {

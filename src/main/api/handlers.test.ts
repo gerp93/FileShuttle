@@ -5,6 +5,11 @@ import type { Database } from '../database/sqlite';
 import { initDatabase } from '../database/schema';
 import { makeTempDir, removeDir } from '../engine/testUtils';
 import { DESKTOP_CHANNELS, HTTP_CHANNELS } from './channels';
+import { Hub } from '../hub/hub';
+import * as repo from '../database/repository';
+import { getLocalWorkerId } from '../database/workers';
+import { createPairing, redeemPairing } from '../database/workerAccess';
+import type { WorkerInfo } from '../../shared/types';
 import { createHandlers } from './handlers';
 
 vi.mock('../dbLocation', () => ({ getEffectiveDbPath: () => '' }));
@@ -27,7 +32,7 @@ const LEGACY_CHANNELS = [
 
 const NEW_CHANNELS = [
   'dialogs:listFolder', 'remote:getSettings', 'remote:setSettings', 'remote:setPassword',
-  'mcp:listTokens', 'mcp:createToken', 'mcp:revokeToken',
+  'mcp:listTokens', 'mcp:createToken', 'mcp:revokeToken', 'workers:list',
 ];
 
 function makeHandlers(db: Database | null = null) {
@@ -92,5 +97,38 @@ describe('handlers over a real database', () => {
 
     expect(() => handlers['mappings:create']({})).toThrow();
     expect(reloadJobs).not.toHaveBeenCalled();
+  });
+  it('lists the computers, and saves a mapping or job on the one it is told to (and refuses one that does not exist)', async () => {
+    const hub = new Hub({ getDb: () => db });
+    const handlers = createHandlers({ getDb: () => db, hub, reloadJobs: vi.fn(), getVersion: () => '9.9.9' });
+    const remote = redeemPairing(db, createPairing(db, { name: 'KVG PC' }).code)!;
+
+    const listed = (await handlers['workers:list']()) as WorkerInfo[];
+    expect(listed.map((w) => [w.name === 'KVG PC' ? 'KVG PC' : 'hub', w.kind, w.online, w.paired])).toEqual([
+      ['hub', 'local', false, true],
+      ['KVG PC', 'remote', false, true],
+    ]);
+
+    const input = {
+      name: 'm', sourcePath: path.join(root, 'a'), destPath: path.join(root, 'b'), recursive: false, conflictPolicy: 'skip',
+      enabled: true, scheduleType: 'manual', scheduleIntervalMinutes: null, scheduleDailyTime: null, filters: [],
+      nextMappingId: null, actionType: 'move', keepNewest: null, keepNewestPerExtension: false,
+    };
+    const mappingId = handlers['mappings:create'](input, remote.workerId) as number;
+    expect(repo.getMapping(db, mappingId)!.workerId).toBe(remote.workerId);
+    expect(repo.getMapping(db, handlers['mappings:create'](input) as number)!.workerId).toBe(getLocalWorkerId(db));
+    expect(() => handlers['mappings:create'](input, 'no-such-worker')).toThrow(/no such computer/);
+
+    const jobId = handlers['jobs:create'](
+      { name: 'j', enabled: true, scheduleType: 'manual', scheduleIntervalMinutes: null, scheduleDailyTimes: [], mappingIds: [mappingId] },
+      remote.workerId
+    ) as number;
+    expect(repo.getJob(db, jobId)!.workerId).toBe(remote.workerId);
+    // a job's steps must all belong to its computer
+    expect(() =>
+      handlers['jobs:create']({ name: 'mixed', enabled: true, scheduleType: 'manual', scheduleIntervalMinutes: null, scheduleDailyTimes: [], mappingIds: [mappingId] })
+    ).toThrow();
+    // nothing can be asked of a computer that is not connected
+    await expect(handlers['dialogs:listFolder'](root, remote.workerId)).rejects.toThrow(/not connected/);
   });
 });

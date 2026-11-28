@@ -1,5 +1,6 @@
 import type { Database } from '../database/sqlite';
 import * as repo from '../database/repository';
+import { getWorker } from '../database/workers';
 import type { Hub } from '../hub/hub';
 import { inputToConfig } from '../services/previewService';
 import { hubSettings, runSettings } from '../settings/appSettings';
@@ -54,15 +55,21 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
   const changed = () => {
     deps.reloadJobs();
   };
+  /** A worker id from the caller, checked; undefined (the default) means this hub's own computer. */
+  const knownWorker = (workerId: string | null | undefined): string | undefined => {
+    if (workerId == null || workerId === '') return undefined;
+    if (!getWorker(db(), String(workerId))) throw new Error('There is no such computer.');
+    return String(workerId);
+  };
 
   return {
     'mappings:list': () => repo.listMappings(db()),
 
     'mappings:get': (id: number) => repo.getMapping(db(), id),
 
-    'mappings:create': (input: CreateMappingInput) => {
+    'mappings:create': (input: CreateMappingInput, workerId?: string) => {
       assertValidMapping(input);
-      const id = repo.createMapping(db(), input);
+      const id = repo.createMapping(db(), input, knownWorker(workerId));
       changed();
       return id;
     },
@@ -91,9 +98,9 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
     },
 
     // Previews the editor's current, possibly unsaved, form values.
-    'mappings:previewInput': async (input: CreateMappingInput) => {
+    'mappings:previewInput': async (input: CreateMappingInput, workerId?: string) => {
       assertValidMapping(input);
-      return deps.hub.previewMapping(inputToConfig(input));
+      return deps.hub.previewMapping(inputToConfig(input), knownWorker(workerId));
     },
 
     'mappings:listJobsUsing': (id: number) => repo.listJobsUsingMapping(db(), id),
@@ -109,9 +116,9 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
 
     'jobs:get': (id: number) => repo.getJob(db(), id),
 
-    'jobs:create': (input: CreateJobInput) => {
+    'jobs:create': (input: CreateJobInput, workerId?: string) => {
       assertValidJob(input);
-      const id = repo.createJob(db(), input);
+      const id = repo.createJob(db(), input, knownWorker(workerId));
       changed();
       return id;
     },
@@ -179,10 +186,14 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
       return applyRetention(db(), 'expired');
     },
 
-    'dialogs:checkFolder': (folder: string, role: FolderRole) => deps.hub.checkFolder(folder, role),
+    'dialogs:checkFolder': (folder: string, role: FolderRole, workerId?: string) =>
+      deps.hub.checkFolder(folder, role, knownWorker(workerId)),
 
     // The phone has no native folder picker; the page browses with this instead.
-    'dialogs:listFolder': (folder?: string | null) => deps.hub.listFolder(folder),
+    'dialogs:listFolder': (folder?: string | null, workerId?: string) => deps.hub.listFolder(folder, knownWorker(workerId)),
+
+    // The computers that move files for this hub, and whether each is online.
+    'workers:list': () => deps.hub.listWorkerInfo(),
 
     'app:getVersion': () => deps.getVersion(),
   };

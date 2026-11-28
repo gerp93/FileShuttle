@@ -29,6 +29,13 @@ export const HEARTBEAT_INTERVAL_MS = 30_000;
 /** A worker the hub has heard nothing from for this long is shown as offline (three missed beats). */
 export const WORKER_OFFLINE_AFTER_MS = 90_000;
 
+/** The settings that change how a run executes (plain data; the hub's values apply to every worker). */
+export interface WorkerRunSettings {
+  /** Send a file replaced by an "overwrite" mapping to the Recycle Bin first. */
+  overwriteBackup: boolean;
+  unzipLimits: { maxEntries: number; maxTotalBytes: number };
+}
+
 /** What a worker needs to know to do its job: its mappings and jobs, steps and filters included. */
 export interface ScheduleSnapshot {
   mappings: MappingRecord[];
@@ -37,7 +44,10 @@ export interface ScheduleSnapshot {
 
 // ---------------------------------------------------------------- worker -> hub
 
-/** First message after connecting. The token is for a future network transport; in-process it is absent. */
+/**
+ * First message after connecting. Over the network the worker's token travels in the HTTP
+ * Authorization header, never in a message, so this field stays unused.
+ */
 export interface HelloMessage {
   type: 'hello';
   workerId: string;
@@ -144,6 +154,8 @@ export interface ScheduleMessage {
   type: 'schedule';
   version: number;
   schedule: ScheduleSnapshot;
+  /** The hub's run settings. Absent from an older hub (the worker then keeps its own defaults). */
+  runSettings?: WorkerRunSettings;
 }
 
 export interface RunNowCommand {
@@ -229,3 +241,27 @@ export const HUB_TO_WORKER_TYPES = [
   'listFolder',
   'checkFolder',
 ] as const;
+
+/**
+ * The reports a worker must not lose. A worker that cannot reach its hub keeps these in its outbox
+ * and delivers them in order once it can; everything else is only ever sent live (a progress
+ * line or a heartbeat that arrives late is worth nothing). Delivery is at-least-once, and every
+ * one of these is safe to receive twice: a step is stored once per `runUid`, a command is answered
+ * once per `requestId`, and a job's "last run" only moves forward.
+ */
+export const DURABLE_WORKER_REPORTS = ['runFinished', 'jobFinished', 'commandResult'] as const;
+
+export function isDurableReport(message: WorkerToHub): boolean {
+  return (DURABLE_WORKER_REPORTS as readonly string[]).includes(message.type);
+}
+
+/** Names of the HTTP routes a worker uses on the hub (all under /worker). */
+export const WORKER_ROUTES = {
+  pair: '/worker/pair',
+  stream: '/worker/stream',
+  report: '/worker/report',
+  import: '/worker/import',
+} as const;
+
+/** The most reports one POST may carry. */
+export const MAX_REPORTS_PER_POST = 200;

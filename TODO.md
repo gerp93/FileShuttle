@@ -8,22 +8,25 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 
 - Phone access, next steps (the first phase, "open File Shuttle from the phone",
   is done: Settings → Remote access, an HTTP server on 127.0.0.1 behind
-  `tailscale serve`, the same UI in the phone's browser). The hub/worker split is
-  prepared and runs in one process (workers table, `worker_id`/`run_uid`,
-  `src/shared/workerProtocol.ts`, in-process transport). Still to do: a network
-  transport, worker tokens and pairing, a second worker, and showing offline
-  workers (heartbeat constants exist, no timer yet) so the phone can manage jobs
-  on several computers; a web-push or notification path
-  for finished runs; a PWA manifest/icon so it can be added to the home screen;
-  a check on a real phone and a real tailnet (the layout was written for ~390 px
-  but only built and unit-tested here).
+  `tailscale serve`, the same UI in the phone's browser). Still to do: a web-push or
+  notification path for finished runs; a PWA manifest/icon so it can be added to the
+  home screen; a check on a real phone and a real tailnet (the layout was written for
+  ~390 px but only built and unit-tested here).
+
+- Remote workers, next steps (phase 5 is done on the hub and command-line side: pairing codes,
+  revocable hashed worker tokens, an SSE + POST transport over the hub's existing loopback port,
+  `fileshuttle-server worker`, an on-disk outbox with idempotent redelivery, offline detection by
+  heartbeat). Not checked yet against a real tailnet, `tailscale serve`'s buffering of the event
+  stream, or the real house server. Still to do: the hub UI for it (a Computers list with online /
+  offline, a computer picker on the mapping and job editors, folder browsing on the chosen
+  computer), the desktop app's "connect to a hub" mode and importing a PC's existing mappings and
+  jobs into a hub, the MCP tools choosing a computer, removing a computer from the hub, a systemd
+  unit for the worker, and a Windows build of the worker.
 
 - Headless server, next steps (phase 4a is done: `fileshuttle-server` .deb,
-  `hub`/`all`, loopback + `tailscale serve`). Still to do: the `worker` command
-  and its network transport, worker tokens and pairing, an outbox for a worker
-  that is offline, a Windows build of the server. Phase 4b (MCP, assistant retired) is
-  done but not tried against a real MCP client. Not checked yet: the .deb built and installed by the real
-  workflow, Node SEA's `process.argv` handling, and a real tailnet.
+  `hub`/`all`/`worker`, loopback + `tailscale serve`). Still to do: a Windows build of the
+  server. Not checked yet: the .deb built and installed by the real workflow, Node SEA's
+  `process.argv` handling, and a real tailnet.
 
 - Windows Task Scheduler integration so scheduled mappings can run even
   when the app itself isn't open. Schedules and watchers only fire while the

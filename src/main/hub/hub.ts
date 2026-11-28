@@ -3,6 +3,7 @@ import type { Database } from '../database/sqlite';
 import {
   FolderRole,
   JobPreview,
+  WorkerInfo,
   MappingConfig,
   RunAllSummary,
   RunProgressEvent,
@@ -12,19 +13,25 @@ import {
 import {
   HubCommand,
   HubToWorker,
+  isDurableReport,
   RunFinishedMessage,
+  WORKER_OFFLINE_AFTER_MS,
   WorkerToHub,
 } from '../../shared/workerProtocol';
 import * as repo from '../database/repository';
+import { queryAll } from '../database/dbHelpers';
 import {
   getLocalWorkerId,
   getScheduleVersion,
+  isWorkerOnline,
+  listWorkers,
   ownerOf,
   recordWorkerHello,
   setScheduleAcked,
   touchWorker,
 } from '../database/workers';
 import { JobAlreadyRunningError } from '../worker/runExecutor';
+import { runSettings } from '../settings/appSettings';
 
 /** The transport as the hub sees one worker: send to it, and be handed what it sends. */
 export interface HubEndpoint {
@@ -39,11 +46,19 @@ export interface HubOptions {
 /** A question to a worker that has not been answered for this long fails (runs and undos can take hours). */
 const COMMAND_TIMEOUT_MS = 120_000;
 
+/**
+ * A run or undo that was asked of a worker which then dropped off the network keeps waiting this long
+ * for the worker to come back and report (it keeps working offline, and delivers its answer from its outbox).
+ */
+export const OFFLINE_COMMAND_GRACE_MS = 10 * 60 * 1000;
+
 interface WorkerLink {
   endpoint: HubEndpoint;
   /** The worker said hello; schedules are only sent after that. */
   introduced: boolean;
   lastSentVersion: number | null;
+  /** The run settings last sent, as JSON: a change to them is sent as a new schedule message too. */
+  lastSentSettings: string | null;
 }
 
 interface Pending {
@@ -51,6 +66,9 @@ interface Pending {
   reject: (error: Error) => void;
   timer: NodeJS.Timeout | null;
   jobId: number | null;
+  workerId: string;
+  /** Set while the worker is offline and this (untimed) command waits for it. */
+  graceTimer?: NodeJS.Timeout | null;
 }
 
 /**
@@ -77,8 +95,60 @@ export class Hub {
 
   /** Registers a worker's endpoint. The worker is sent its schedule when it says hello. */
   attachWorker(workerId: string, endpoint: HubEndpoint): void {
-    this.links.set(workerId, { endpoint, introduced: false, lastSentVersion: null });
+    this.links.set(workerId, { endpoint, introduced: false, lastSentVersion: null, lastSentSettings: null });
+    // Anything that was waiting for this worker while it was away is waiting no longer.
+    for (const entry of this.pending.values()) {
+      if (entry.workerId === workerId && entry.graceTimer) {
+        clearTimeout(entry.graceTimer);
+        entry.graceTimer = null;
+      }
+    }
     endpoint.onMessage((message) => this.handleReport(workerId, message));
+  }
+
+  /**
+   * The worker's connection is gone (only if `endpoint` is still the current one: a worker that already
+   * reconnected is not detached by its old connection closing late). The worker is shown offline; what it
+   * was running is no longer shown as running here; commands waiting on it fail, except runs and undos,
+   * which wait a while for the worker to come back and report.
+   */
+  detachWorker(workerId: string, endpoint?: HubEndpoint): void {
+    const link = this.links.get(workerId);
+    if (!link || (endpoint && link.endpoint !== endpoint)) return;
+    this.links.delete(workerId);
+    for (const [jobId, event] of [...this.activeRuns]) {
+      if (ownerOf(this.db, 'jobs', jobId) !== workerId) continue;
+      this.activeRuns.delete(jobId);
+      this.progressListener?.({ ...event, phase: 'finished' });
+    }
+    for (const [requestId, entry] of [...this.pending]) {
+      if (entry.workerId !== workerId) continue;
+      if (entry.timer) {
+        this.pending.delete(requestId);
+        clearTimeout(entry.timer);
+        entry.reject(new Error('The computer went offline before it answered.'));
+      } else if (!entry.graceTimer) {
+        entry.graceTimer = setTimeout(() => {
+          this.pending.delete(requestId);
+          entry.reject(new Error('The computer went offline and did not report back. Check History: the run may have finished.'));
+        }, OFFLINE_COMMAND_GRACE_MS);
+        entry.graceTimer.unref?.();
+      }
+    }
+  }
+
+  /** True while the worker has a live connection to this hub. */
+  isConnected(workerId: string): boolean {
+    return this.links.get(workerId)?.introduced === true;
+  }
+
+  /**
+   * One report from a worker that came over a connection of its own (the network transport). The
+   * reports a worker holds in its outbox are accepted whether or not the worker is connected right
+   * now: they are idempotent, and refusing them would only make the worker send them again.
+   */
+  receive(workerId: string, message: WorkerToHub): void {
+    if (isDurableReport(message) || this.links.has(workerId)) this.handleReport(workerId, message);
   }
 
   /** Where progress for every run, manual or scheduled, goes (the main process forwards it to the windows and phones). */
@@ -89,6 +159,31 @@ export class Hub {
   /** Ids of the workers that are attached right now. */
   connectedWorkerIds(): string[] {
     return [...this.links.keys()];
+  }
+
+  /** Every computer this hub knows, with whether it is online (connected and heard from within WORKER_OFFLINE_AFTER_MS). */
+  listWorkerInfo(nowMs: number = Date.now()): WorkerInfo[] {
+    const db = this.db;
+    const counts = (table: 'mappings' | 'jobs'): Map<string, number> =>
+      new Map(
+        queryAll(db, `SELECT worker_id, COUNT(*) AS c FROM ${table} GROUP BY worker_id`).map((row) => [
+          String(row.worker_id),
+          Number(row.c),
+        ])
+      );
+    const mappingCounts = counts('mappings');
+    const jobCounts = counts('jobs');
+    return listWorkers(db).map((worker) => ({
+      id: worker.id,
+      name: worker.name,
+      kind: worker.kind,
+      online: isWorkerOnline(worker, this.isConnected(worker.id), nowMs, WORKER_OFFLINE_AFTER_MS),
+      lastSeenAt: worker.lastSeenAt,
+      appVersion: worker.appVersion,
+      paired: worker.kind === 'local' || worker.hasToken,
+      mappingCount: mappingCounts.get(worker.id) ?? 0,
+      jobCount: jobCounts.get(worker.id) ?? 0,
+    }));
   }
 
   /** Jobs that are queued or running right now, with their latest progress. */
@@ -106,7 +201,7 @@ export class Hub {
     for (const [workerId, link] of this.links) {
       if (!link.introduced) continue;
       const version = getScheduleVersion(this.db, workerId);
-      if (version === link.lastSentVersion) continue;
+      if (version === link.lastSentVersion && JSON.stringify(runSettings.read(this.db)) === link.lastSentSettings) continue;
       this.sendSchedule(workerId, link);
     }
   }
@@ -115,6 +210,8 @@ export class Hub {
     const db = this.db;
     const version = getScheduleVersion(db, workerId);
     link.lastSentVersion = version;
+    const settings = runSettings.read(db);
+    link.lastSentSettings = JSON.stringify(settings);
     link.endpoint.send({
       type: 'schedule',
       version,
@@ -122,6 +219,7 @@ export class Hub {
         mappings: repo.listMappings(db, false, workerId),
         jobs: repo.listJobs(db, false, workerId),
       },
+      runSettings: settings,
     });
   }
 
@@ -129,10 +227,11 @@ export class Hub {
 
   private handleReport(workerId: string, message: WorkerToHub): void {
     const link = this.links.get(workerId);
-    if (!link) return;
+    if (!link && !isDurableReport(message)) return;
     const now = new Date().toISOString();
     switch (message.type) {
       case 'hello':
+        if (!link) return;
         recordWorkerHello(this.db, workerId, message, now);
         link.introduced = true;
         // A worker that connects is always sent the current schedule, whatever it says it has.
@@ -143,6 +242,7 @@ export class Hub {
         return;
       case 'commandResult':
         this.settle(message);
+        touchWorker(this.db, workerId, now);
         return;
       case 'runStarted':
         // Nothing to store until the step ends; a run that dies leaves no row (as before).
@@ -155,9 +255,13 @@ export class Hub {
         return;
       case 'runFinished':
         this.storeRun(workerId, message);
+        touchWorker(this.db, workerId, now);
         return;
       case 'jobFinished':
-        if (message.completed) repo.setJobLastRun(this.db, message.jobId, message.startedAt);
+        if (message.completed && repo.getJob(this.db, message.jobId)) {
+          repo.setJobLastRun(this.db, message.jobId, message.startedAt);
+        }
+        touchWorker(this.db, workerId, now);
         return;
       case 'log':
         console[message.level](`[worker ${workerId}] ${message.message}`);
@@ -200,6 +304,7 @@ export class Hub {
     if (!entry) return;
     this.pending.delete(message.requestId);
     if (entry.timer) clearTimeout(entry.timer);
+    if (entry.graceTimer) clearTimeout(entry.graceTimer);
     if (message.ok) {
       entry.resolve(message.payload);
     } else if (message.errorCode === 'job_already_running' && entry.jobId != null) {
@@ -236,6 +341,7 @@ export class Hub {
         reject,
         timer,
         jobId: options.jobId ?? null,
+        workerId,
       });
       link.endpoint.send(build(requestId));
     });
@@ -343,16 +449,17 @@ export class Hub {
     );
   }
 
-  listFolder(folder: string | null | undefined): Promise<unknown> {
-    return this.command(getLocalWorkerId(this.db), (requestId) => ({
+  /** Lists a folder on a worker's own computer (the hub's own when no worker is named). */
+  listFolder(folder: string | null | undefined, workerId?: string): Promise<unknown> {
+    return this.command(workerId ?? getLocalWorkerId(this.db), (requestId) => ({
       type: 'listFolder',
       requestId,
       folder: folder ?? null,
     }));
   }
 
-  checkFolder(folder: string, role: FolderRole): Promise<unknown> {
-    return this.command(getLocalWorkerId(this.db), (requestId) => ({ type: 'checkFolder', requestId, folder, role }));
+  checkFolder(folder: string, role: FolderRole, workerId?: string): Promise<unknown> {
+    return this.command(workerId ?? getLocalWorkerId(this.db), (requestId) => ({ type: 'checkFolder', requestId, folder, role }));
   }
 }
 

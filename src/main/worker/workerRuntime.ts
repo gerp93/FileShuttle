@@ -5,6 +5,7 @@ import {
   HubToWorker,
   PROTOCOL_VERSION,
   ScheduleSnapshot,
+  WorkerRunSettings,
   WorkerToHub,
 } from '../../shared/workerProtocol';
 import { previewMapping } from '../services/previewService';
@@ -22,6 +23,11 @@ export type { JobSource } from './jobSource';
 export interface WorkerEndpoint {
   send(message: WorkerToHub): void;
   onMessage(handler: (message: HubToWorker) => void): void;
+  /**
+   * A transport that can drop and come back calls this handler every time it is (re)connected, and the
+   * worker then says hello again. One without it (the in-process link) is introduced once, by connect().
+   */
+  onOpen?(handler: () => void): void;
 }
 
 export interface WorkerRuntimeOptions {
@@ -34,6 +40,15 @@ export interface WorkerRuntimeOptions {
   onBackgroundRunFinished?: (kind: 'scheduled' | 'watched folder', jobId: number, result: RunResult) => void;
   /** Send heartbeats (the app does; most tests do not need the timer). */
   heartbeat?: boolean;
+  /**
+   * The last schedule this worker was given (kept on disk by a remote worker). It is applied by connect()
+   * without waiting for the hub, so schedules keep firing while the hub is out of reach, or after a restart.
+   */
+  initialSchedule?: { version: number; schedule: ScheduleSnapshot };
+  /** A new schedule from the hub was applied (a remote worker stores it, and takes the hub's run settings). */
+  onScheduleApplied?: (version: number, schedule: ScheduleSnapshot, runSettings: WorkerRunSettings | undefined) => void;
+  /** A job's last full run moved on (a remote worker stores the schedule again so catch-up stays right). */
+  onLastRunChanged?: () => void;
 }
 
 /**
@@ -65,6 +80,12 @@ export class WorkerRuntime implements JobSource {
       opts.onBackgroundRunFinished?.('watched folder', jobId, result)
     );
     opts.endpoint.onMessage((message) => this.handle(message));
+    opts.endpoint.onOpen?.(() => this.sendHello());
+  }
+
+  /** The schedule as it stands (for a remote worker to store). */
+  currentSchedule(): { version: number; schedule: ScheduleSnapshot } {
+    return { version: this.scheduleVersion, schedule: this.schedule };
   }
 
   // JobSource -------------------------------------------------------------
@@ -81,6 +102,24 @@ export class WorkerRuntime implements JobSource {
 
   /** Introduces the worker to the hub, which answers with the current schedule. */
   connect(): void {
+    if (this.opts.initialSchedule && !this.everApplied) {
+      this.schedule = this.opts.initialSchedule.schedule;
+      this.scheduleVersion = this.opts.initialSchedule.version;
+      this.everApplied = true;
+      this.scheduler.reloadJobs();
+      this.watcher.reloadJobs();
+      this.scheduler.catchUp();
+      this.watcher.catchUp();
+    }
+    // A transport that reconnects asks for the hello itself, each time it is connected.
+    if (!this.opts.endpoint.onOpen) this.sendHello();
+    if (this.opts.heartbeat && !this.heartbeatTimer) {
+      this.heartbeatTimer = setInterval(() => this.send(this.heartbeatMessage()), HEARTBEAT_INTERVAL_MS);
+      this.heartbeatTimer.unref?.();
+    }
+  }
+
+  private sendHello(): void {
     this.send({
       type: 'hello',
       workerId: this.opts.workerId,
@@ -88,10 +127,6 @@ export class WorkerRuntime implements JobSource {
       protocolVersion: PROTOCOL_VERSION,
       scheduleVersion: this.scheduleVersion,
     });
-    if (this.opts.heartbeat && !this.heartbeatTimer) {
-      this.heartbeatTimer = setInterval(() => this.send(this.heartbeatMessage()), HEARTBEAT_INTERVAL_MS);
-      this.heartbeatTimer.unref?.();
-    }
   }
 
   shutdown(): void {
@@ -120,20 +155,24 @@ export class WorkerRuntime implements JobSource {
 
   private markLastRun(jobId: number, startedAt: string): void {
     const job = this.schedule.jobs.find((candidate) => candidate.id === jobId);
-    if (job) job.lastRunAt = startedAt;
+    if (job) {
+      job.lastRunAt = startedAt;
+      this.opts.onLastRunChanged?.();
+    }
   }
 
   private handle(message: HubToWorker): void {
     if (message.type === 'schedule') {
-      this.applySchedule(message.version, message.schedule);
+      this.applySchedule(message.version, message.schedule, message.runSettings);
       return;
     }
     void this.handleCommand(message);
   }
 
-  private applySchedule(version: number, schedule: ScheduleSnapshot): void {
+  private applySchedule(version: number, schedule: ScheduleSnapshot, runSettings?: WorkerRunSettings): void {
     this.schedule = schedule;
     this.scheduleVersion = version;
+    this.opts.onScheduleApplied?.(version, schedule, runSettings);
     this.scheduler.reloadJobs();
     this.watcher.reloadJobs();
     this.send({ type: 'scheduleAck', workerId: this.opts.workerId, version });

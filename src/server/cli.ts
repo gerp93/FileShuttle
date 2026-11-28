@@ -5,6 +5,8 @@ import { prepareDataDir, startServer } from './server';
 import { flushDatabase, initDatabase } from '../main/database/schema';
 import { setStartupLogQuiet } from '../main/startupLog';
 import { setRemotePassword } from '../main/remote/remoteSettings';
+import { waitForSignal } from './signals';
+import { workerCommand, workersCommand } from './cliWorker';
 import { createMcpToken, listMcpTokens, revokeMcpToken } from '../main/mcp/tokens';
 
 export const USAGE = `FileShuttle server ${APP_VERSION}
@@ -13,7 +15,13 @@ Usage: fileshuttle-server <command>
 
   all            hub and a local worker in one process (what the systemd unit runs)
   hub            the hub only (database, schedules, web UI and API); runs nothing itself
-  worker         a worker for a remote hub (not available yet)
+  worker         run as a worker for a hub on another computer (its folders, the hub's schedule)
+  worker pair <hub address> <code>   pair this computer with a hub (code from "workers pair")
+  worker status | unpair             show or forget the pairing
+  workers list                       the computers this hub knows, online or offline
+  workers pair <name>                a one-time code (15 minutes) to pair a new computer
+  workers repair <name>              a new code for a computer whose pairing was revoked
+  workers revoke <name>              cut a computer off (its history and jobs are kept)
   set-password   set the password for the web UI (typed twice, or one line on stdin)
   mcp-token create <name>   make an access token for the MCP server (shown once)
   mcp-token list            list the tokens (names and dates, never the tokens)
@@ -171,23 +179,6 @@ async function mcpTokenCommand(args: string[]): Promise<number> {
   }
 }
 
-function waitForSignal(stop: () => Promise<void>): Promise<void> {
-  return new Promise((resolve) => {
-    let stopping = false;
-    const handler = (signal: string) => {
-      if (stopping) return;
-      stopping = true;
-      console.log(`${signal} received, shutting down`);
-      stop().then(resolve, (err) => {
-        console.error('error while shutting down:', err);
-        resolve();
-      });
-    };
-    process.on('SIGTERM', () => handler('SIGTERM'));
-    process.on('SIGINT', () => handler('SIGINT'));
-  });
-}
-
 /** Runs one subcommand and resolves with the exit code. For `hub` and `all` it resolves only after SIGTERM/SIGINT. */
 export async function runCli(args: string[]): Promise<number> {
   const command = args[0];
@@ -212,8 +203,9 @@ export async function runCli(args: string[]): Promise<number> {
         return 0;
       }
       case 'worker':
-        console.error('The remote worker is not available yet (phase 5). Use "all" for a hub with a local worker.');
-        return 2;
+        return await workerCommand(args.slice(1));
+      case 'workers':
+        return await workersCommand(args.slice(1));
       case 'set-password':
         return await setPasswordCommand();
       case 'mcp-token':

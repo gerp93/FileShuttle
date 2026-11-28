@@ -89,10 +89,92 @@ linuxOnly('the built server bundle', () => {
     expect(refused.status).toBe(2);
     expect(refused.stderr).toContain('not a loopback address');
 
-    const worker = spawnSync(process.execPath, [bundle, 'worker'], { encoding: 'utf8' });
-    expect(worker.status).toBe(2);
-    expect(worker.stderr).toContain('phase 5');
+    // A worker that was never paired says so and does nothing.
+    const worker = spawnSync(process.execPath, [bundle, 'worker'], {
+      encoding: 'utf8',
+      env: { ...process.env, FILESHUTTLE_WORKER_DIR: path.join(out, 'unpaired-worker') },
+    });
+    expect(worker.status).toBe(1);
+    expect(worker.stderr).toContain('not paired');
   });
+
+  it('pairs a worker with a running hub and keeps it connected (the real bundle on both sides)', async () => {
+    const port = await new Promise<number>((resolve) => {
+      const probe = net.createServer().listen(0, '127.0.0.1', () => {
+        const p = (probe.address() as net.AddressInfo).port;
+        probe.close(() => resolve(p));
+      });
+    });
+    const hubEnv = {
+      ...process.env,
+      FILESHUTTLE_SERVER_DATA_DIR: path.join(out, 'pair-hub'),
+      FILESHUTTLE_SERVER_WEB_DIR: path.join(out, 'web'),
+      FILESHUTTLE_SERVER_PORT: String(port),
+    };
+    writeFile(path.join(out, 'web', 'index.html'), '<!doctype html><title>FileShuttle</title>');
+    const workerEnv = { ...process.env, FILESHUTTLE_WORKER_DIR: path.join(out, 'pair-worker') };
+    const collect = (child: ReturnType<typeof spawn>) => {
+      const box = { text: '' };
+      child.stdout?.on('data', (d) => (box.text += d));
+      child.stderr?.on('data', (d) => (box.text += d));
+      return box;
+    };
+    const hub = spawn(process.execPath, [bundle, 'hub'], { env: hubEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    const hubOut = collect(hub);
+    let worker: ReturnType<typeof spawn> | null = null;
+    try {
+      const until = async (box: { text: string }, needle: string) => {
+        const deadline = Date.now() + 20_000;
+        while (!box.text.includes(needle) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+        expect(box.text).toContain(needle);
+      };
+      await until(hubOut, 'listening on');
+
+      const made = spawnSync(process.execPath, [bundle, 'workers', 'pair', 'Test PC'], { encoding: 'utf8', env: hubEnv });
+      expect(made.status).toBe(0);
+      const code = made.stdout.trim();
+      expect(code).toMatch(/^[0-9A-Z]{5}-[0-9A-Z]{5}$/);
+
+      const paired = spawnSync(process.execPath, [bundle, 'worker', 'pair', `http://127.0.0.1:${port}`, code], {
+        encoding: 'utf8',
+        env: workerEnv,
+      });
+      expect(paired.status, paired.stderr).toBe(0);
+      expect(paired.stdout).toContain('Paired as "Test PC"');
+      const token = (JSON.parse(fs.readFileSync(path.join(out, 'pair-worker', 'worker.json'), 'utf8')) as { token: string }).token;
+      expect(token).toMatch(/^fsw_/);
+      expect(paired.stdout + paired.stderr).not.toContain(token);
+      if (process.platform !== 'win32') {
+        expect(fs.statSync(path.join(out, 'pair-worker', 'worker.json')).mode & 0o777).toBe(0o600);
+      }
+
+      worker = spawn(process.execPath, [bundle, 'worker'], { env: workerEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+      const workerExited = new Promise<number | null>((resolve) => worker!.on('exit', (c) => resolve(c)));
+      const workerOut = collect(worker);
+      await until(workerOut, 'hub connection: connected');
+      expect(workerOut.text).not.toContain(token);
+
+      // The hub's own list now shows it online.
+      const deadline = Date.now() + 10_000;
+      let listing = '';
+      while (!/Test PC	remote	online/.test(listing) && Date.now() < deadline) {
+        listing = spawnSync(process.execPath, [bundle, 'workers', 'list'], { encoding: 'utf8', env: hubEnv }).stdout;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      expect(listing).toMatch(/Test PC	remote	online/);
+
+      // Revoked from the command line, the worker is cut off and stays down.
+      expect(spawnSync(process.execPath, [bundle, 'workers', 'revoke', 'Test PC'], { encoding: 'utf8', env: hubEnv }).status).toBe(0);
+      await until(workerOut, 'hub connection: revoked');
+      expect(hubOut.text).not.toContain(token);
+      // ...and it ends with a status of its own (3), so a service manager does not restart it in a loop.
+      expect(await workerExited).toBe(3);
+      expect(fs.existsSync(path.join(out, 'pair-worker', 'schedule.json'))).toBe(false);
+    } finally {
+      worker?.kill('SIGKILL');
+      hub.kill('SIGKILL');
+    }
+  }, 90_000);
 
   it('starts, serves the sign-in page and exits 0 on SIGTERM', async () => {
     const port = await new Promise<number>((resolve) => {

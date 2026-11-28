@@ -34,6 +34,8 @@ export interface RemoteServerOptions {
   getAllowedLogins: () => string[];
   /** The MCP endpoint (POST /mcp). It does its own auth (bearer token); null/absent leaves /mcp unserved. */
   mcp?: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+  /** The door for remote workers (/worker/...). It does its own auth (pairing code, then a worker token); absent leaves /worker unserved. */
+  workers?: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
   onError?: (message: string) => void;
   sessionIdleMs?: number;
   maxLoginFailures?: number;
@@ -285,6 +287,8 @@ export class RemoteServer {
 
       if (pathname === '/mcp' && this.opts.mcp) {
         await this.opts.mcp(req, res);
+      } else if ((pathname === '/worker' || pathname.startsWith('/worker/')) && this.opts.workers) {
+        await this.opts.workers(req, res);
       } else if (pathname === '/api' || pathname.startsWith('/api/')) {
         await this.handleApi(req, res, pathname);
       } else {

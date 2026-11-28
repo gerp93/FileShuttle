@@ -7,7 +7,7 @@ import { initDatabase } from '../database/schema';
 import { getLocalWorkerId, getWorker } from '../database/workers';
 import { listTree, makeTempDir, removeDir, writeFile } from '../engine/testUtils';
 import { runSettings, RUN_SETTING_KEYS, HUB_SETTING_KEYS, hubSettings } from '../settings/appSettings';
-import { PROTOCOL_VERSION, RunFinishedMessage, WorkerToHub } from '../../shared/workerProtocol';
+import { HubToWorker as HubToWorkerMessage, PROTOCOL_VERSION, RunFinishedMessage, WorkerToHub } from '../../shared/workerProtocol';
 import { Hub, HubEndpoint } from './hub';
 import { startTestSystem, TestSystem } from '../worker/testUtils';
 
@@ -180,5 +180,74 @@ describe('settings split', () => {
     expect(hubSettings.getTheme(db)).toBe('hacker');
     // The run settings are plain data, so they can cross the protocol.
     expect(JSON.parse(JSON.stringify(runSettings.read(db)))).toEqual(runSettings.read(db));
+  });
+});
+
+describe('a worker whose connection drops', () => {
+  function manualWorker(workerId: string) {
+    const hub = new Hub({ getDb: () => db });
+    const sent: HubToWorkerMessage[] = [];
+    let report: (message: WorkerToHub) => void = () => undefined;
+    const endpoint: HubEndpoint = { send: (m) => sent.push(m), onMessage: (h) => (report = h) };
+    hub.attachWorker(workerId, endpoint);
+    const hello = (): void =>
+      report({ type: 'hello', workerId, appVersion: '1', protocolVersion: PROTOCOL_VERSION, scheduleVersion: 0 });
+    return { hub, sent, endpoint, report: (m: WorkerToHub) => report(m), hello };
+  }
+
+  it('fails a question that is waiting for it, at once', async () => {
+    const workerId = getLocalWorkerId(db);
+    const { hub, endpoint, hello } = manualWorker(workerId);
+    hello();
+    const answer = hub.checkFolder(root, 'source', workerId);
+    hub.detachWorker(workerId, endpoint);
+    await expect(answer).rejects.toThrow(/went offline/);
+    expect(hub.isConnected(workerId)).toBe(false);
+  });
+
+  it('keeps a run waiting for the worker to come back and report, and then settles it', async () => {
+    const workerId = getLocalWorkerId(db);
+    const jobId = addJob('long', path.join(root, 'in'), path.join(root, 'out'));
+    const first = manualWorker(workerId);
+    first.hello();
+    const run = first.hub.runJob(jobId, 'manual');
+    const command = first.sent.find((m) => m.type === 'runNow') as { requestId: string };
+    first.hub.detachWorker(workerId, first.endpoint);
+
+    // the same hub, a new connection: the worker reconnects and delivers its answer from its outbox
+    const endpoint: HubEndpoint = { send: () => undefined, onMessage: () => undefined };
+    first.hub.attachWorker(workerId, endpoint);
+    const result = repo.buildRunResult(new Date(), new Date(), []);
+    first.hub.receive(workerId, { type: 'commandResult', requestId: command.requestId, ok: true, payload: result });
+    await expect(run).resolves.toMatchObject({ filesMoved: 0 });
+  });
+
+  it('takes durable reports with no connection, but nothing else', () => {
+    const workerId = getLocalWorkerId(db);
+    const hub = new Hub({ getDb: () => db });
+    hub.receive(workerId, { type: 'heartbeat', workerId, sentAt: 'x' });
+    expect(getWorker(db, workerId)!.lastSeenAt).toBeNull();
+    const jobId = addJob('held', path.join(root, 'in'), path.join(root, 'out'));
+    hub.receive(workerId, { type: 'jobFinished', workerId, jobId, startedAt: '2026-01-02T00:00:00.000Z', completed: true });
+    expect(repo.getJob(db, jobId)!.lastRunAt).toBe('2026-01-02T00:00:00.000Z');
+    // an older report, delivered late, never moves "last run" back
+    hub.receive(workerId, { type: 'jobFinished', workerId, jobId, startedAt: '2026-01-01T00:00:00.000Z', completed: true });
+    expect(repo.getJob(db, jobId)!.lastRunAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  it('sends the run settings with the schedule, and again when they change', () => {
+    const workerId = getLocalWorkerId(db);
+    const { hub, sent, hello } = manualWorker(workerId);
+    hello();
+    const first = sent.filter((m) => m.type === 'schedule');
+    expect(first).toHaveLength(1);
+    expect((first[0] as { runSettings: unknown }).runSettings).toEqual(runSettings.read(db));
+    hub.syncSchedules();
+    expect(sent.filter((m) => m.type === 'schedule')).toHaveLength(1); // nothing changed
+    runSettings.setOverwriteBackup(db, false);
+    hub.syncSchedules();
+    const all = sent.filter((m) => m.type === 'schedule') as { runSettings: { overwriteBackup: boolean } }[];
+    expect(all).toHaveLength(2);
+    expect(all[1].runSettings.overwriteBackup).toBe(false);
   });
 });

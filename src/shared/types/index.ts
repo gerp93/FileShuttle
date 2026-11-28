@@ -280,6 +280,22 @@ export interface McpTokenInfo {
   lastUsedAt: string | null;
 }
 
+/** A computer that moves files for this hub (a "worker"), as the hub's pages show it. Never holds a token. */
+export interface WorkerInfo {
+  id: string;
+  name: string;
+  /** `local` runs inside the hub; `remote` is another computer paired with it. */
+  kind: 'local' | 'remote';
+  /** Connected to the hub right now and heard from recently. */
+  online: boolean;
+  lastSeenAt: string | null;
+  appVersion: string | null;
+  /** A remote computer whose token was revoked is not paired any more (always true for `local`). */
+  paired: boolean;
+  mappingCount: number;
+  jobCount: number;
+}
+
 export const DEFAULT_REMOTE_PORT = 8765;
 export const MIN_REMOTE_PASSWORD_LENGTH = 8;
 

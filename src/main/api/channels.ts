@@ -46,6 +46,7 @@ export const HTTP_CHANNELS: readonly string[] = [
   'settings:setUnzipLimits',
   'dialogs:checkFolder',
   'dialogs:listFolder',
+  'workers:list',
   'app:getVersion',
 ];
 
