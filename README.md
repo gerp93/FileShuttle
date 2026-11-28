@@ -269,9 +269,10 @@ setx FILESHUTTLE_WORKER_ALLOWED_FOLDERS "D:\Inbox;D:\Archive"
   `uninstall-logon` runs `reg delete`. It is a per-user Run key, not a Task Scheduler task and not a
   service: it needs no admin rights, belongs to you alone, and the worker runs as you. Run it
   from the `.exe` itself, and move the folder only before installing (the key stores the path).
-- **Deletes are refused.** The Windows worker has no Recycle Bin access (that needs native code), so a
-  step that would delete a file fails and leaves the file where it is. It never deletes outright.
-  Copy and move work normally; use the desktop app on that PC if you need Recycle Bin deletes.
+- **Deletes go to the Recycle Bin.** Because the worker runs as you (not as a service), a delete step moves
+  the file to your own Recycle Bin through a fixed PowerShell script (the path is passed on stdin, never in the
+  command line). If PowerShell fails or the file is still there afterwards, the step fails and the file stays;
+  it is never deleted for good.
 - **Data** is in `%LOCALAPPDATA%\FileShuttleWorker` (token encrypted with DPAPI). A hub run on Windows
   keeps its data in `%LOCALAPPDATA%\FileShuttleServer` and serves the `web` folder beside the `.exe`.
 

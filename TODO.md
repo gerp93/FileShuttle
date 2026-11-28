@@ -15,7 +15,7 @@ This app's own backlog — not a KVG_Standards compliance checklist. Just what's
   pieces only; never clicked through).
 - Not checked: the `.deb` built and installed by the real workflow, a real tailnet, a real phone, MCP
   against a real client.
-- Windows worker cannot delete to the Recycle Bin (deletes are refused).
+- The Windows worker's Recycle Bin delete (PowerShell + VisualBasic FileSystem) is only unit-tested with a mock here; the real-Windows test runs in CI's windows-latest job.
 - A web-push or notification path for finished runs; a PWA manifest/icon.
 - Windows Task Scheduler integration for the desktop app itself (runs while closed).
 - Watch mode for new files only; job preview across chained steps; macOS Trash undo; undo for merged unzip.
