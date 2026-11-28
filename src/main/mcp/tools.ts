@@ -239,11 +239,13 @@ export const TOOLS: ToolDef[] = [
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: (ctx) => {
       const db = ctx.getDb();
+      const machines = new Map(listWorkers(db, true).map((w) => [w.id, w.name]));
       return ok(
         repo.listMappings(db).map((m) => ({
           id: m.id,
           name: m.name,
           workerId: m.workerId,
+          machine: machines.get(m.workerId) ?? null,
           action: m.actionType,
           sourcePath: m.sourcePath,
           destPath: m.destPath,
@@ -264,12 +266,14 @@ export const TOOLS: ToolDef[] = [
       'List every saved job: its schedule, whether it is switched on, when it last ran, and its steps in order.',
     schema: z.object({}),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    run: (ctx) =>
-      ok(
+    run: (ctx) => {
+      const machines = new Map(listWorkers(ctx.getDb(), true).map((w) => [w.id, w.name]));
+      return ok(
         repo.listJobs(ctx.getDb()).map((j) => ({
           id: j.id,
           name: j.name,
           workerId: j.workerId,
+          machine: machines.get(j.workerId) ?? null,
           switchedOn: j.enabled,
           scheduleType: j.scheduleType,
           scheduleIntervalMinutes: j.scheduleIntervalMinutes,
@@ -278,7 +282,8 @@ export const TOOLS: ToolDef[] = [
           lastRunAt: j.lastRunAt,
           steps: j.steps.map((s) => ({ mappingId: s.id, name: s.name, action: s.actionType, switchedOn: s.enabled })),
         }))
-      ),
+      );
+    },
   },
   {
     name: 'get_active_runs',
@@ -326,7 +331,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'list_folder',
-    description: `Look inside a folder: names, sizes and modified dates only (never file contents), plus counts per extension. Shallow by default; recursive goes up to 3 levels. At most ${FOLDER_LIST_MAX_LIMIT} entries.`,
+    description: `Look inside a folder: names, sizes and modified dates only (never file contents), plus counts per extension. Shallow by default; recursive goes up to 3 levels. At most ${FOLDER_LIST_MAX_LIMIT} entries. It reads the machine running File Shuttle itself, not a paired machine.`,
     schema: z.object({
       path: z.string(),
       recursive: z.boolean().optional(),

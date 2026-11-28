@@ -8,10 +8,12 @@ interface Props {
   startAt: string;
   onPick: (path: string) => void;
   onCancel: () => void;
+  /** The machine whose folders are listed. Absent: the one running the app. */
+  workerId?: string | null;
 }
 
 /** Stands in for the native folder picker when the page is open on the phone. */
-export default function FolderBrowserDialog({ title, startAt, onPick, onCancel }: Props) {
+export default function FolderBrowserDialog({ title, startAt, onPick, onCancel, workerId }: Props) {
   const [listing, setListing] = useState<FolderListing | null>(null);
   const [typed, setTyped] = useState(startAt);
   const [loading, setLoading] = useState(true);
@@ -21,7 +23,7 @@ export default function FolderBrowserDialog({ title, startAt, onPick, onCancel }
     setLoading(true);
     setFailure('');
     try {
-      const result = await window.fileshuttleAPI.dialogs.listFolder(target);
+      const result = await window.fileshuttleAPI.dialogs.listFolder(target, workerId ?? null);
       setListing(result);
       setTyped(result.path ?? '');
     } catch (err) {
@@ -29,7 +31,7 @@ export default function FolderBrowserDialog({ title, startAt, onPick, onCancel }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workerId]);
 
   useEffect(() => {
     void open(startAt.trim() ? startAt : null);

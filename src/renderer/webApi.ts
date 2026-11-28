@@ -159,8 +159,8 @@ export function createWebApi(): FileShuttleAPI {
     },
     dialogs: {
       pickFolder: () => unavailable(), // the page uses its own folder browser (listFolder)
-      checkFolder: (folder, role) => rpc('dialogs:checkFolder', folder, role),
-      listFolder: (folder) => rpc('dialogs:listFolder', folder ?? null),
+      checkFolder: (folder, role, workerId) => rpc('dialogs:checkFolder', folder, role, workerId ?? null),
+      listFolder: (folder, workerId) => rpc('dialogs:listFolder', folder ?? null, workerId ?? null),
     },
     shell: {
       openPath: () => unavailable(),
@@ -179,6 +179,11 @@ export function createWebApi(): FileShuttleAPI {
       getSettings: () => unavailable(),
       setSettings: () => unavailable(),
       setPassword: () => unavailable(),
+    },
+    workers: {
+      list: () => rpc('workers:list'),
+      createPairCode: () => rpc('workers:createPairCode'),
+      remove: (workerId) => rpc('workers:remove', workerId),
     },
     mcp: {
       listTokens: () => unavailable(),

@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { computeRunStatus, JobRecord, RunProgressEvent, RunResult } from '../../shared/types';
+import type { FileOutcome, MappingConfig } from '../../shared/types';
 import type { UndoCommand, WorkerToHub } from '../../shared/workerProtocol';
 import { toMappingConfig } from '../database/repository';
 import type { RunSettings } from '../settings/appSettings';
@@ -14,6 +15,14 @@ export class JobAlreadyRunningError extends Error {
   }
 }
 
+/** A worker-side check on which folders may be touched (a remote worker's allowed list). */
+export interface FolderGuard {
+  /** A sentence saying why a mapping's folders are refused, or null when they are fine. */
+  problemWithMapping(config: Pick<MappingConfig, 'sourcePath' | 'destPath' | 'actionType'>): Promise<string | null>;
+  /** The same for every path an undo would touch. */
+  problemWithOutcomes(outcomes: readonly FileOutcome[]): Promise<string | null>;
+}
+
 /** What the executor needs from the worker around it. It touches no database. */
 export interface ExecutorDeps {
   workerId: string;
@@ -23,6 +32,8 @@ export interface ExecutorDeps {
   readRunSettings: () => RunSettings;
   /** Sends a report to the hub. */
   emit: (message: WorkerToHub) => void;
+  /** Present on a remote worker: refuses folders outside its allowed list. */
+  guard?: FolderGuard;
 }
 
 /**
@@ -127,7 +138,30 @@ export class RunExecutor {
           processed: p.processed,
           total: p.total,
         });
-      const result = await runMapping(toMappingConfig(mapping), {
+      const mappingConfig = toMappingConfig(mapping);
+      const refused = this.deps.guard ? await this.deps.guard.problemWithMapping(mappingConfig) : null;
+      if (refused) {
+        // Nothing is touched. The step is reported as an error with the reason, and the chain stops.
+        const nothing = aggregateResults([]);
+        this.deps.emit({
+          type: 'runFinished',
+          workerId,
+          runUid,
+          mappingId: mapping.id,
+          mappingNameSnapshot: mapping.name,
+          jobId: job.id,
+          jobNameSnapshot: job.name,
+          triggerType,
+          status: 'error',
+          errorMessage: refused,
+          triggeredByRunUid,
+          undoesRunUid: null,
+          result: nothing,
+        });
+        results.push(nothing);
+        break;
+      }
+      const result = await runMapping(mappingConfig, {
         backupOverwritten: settings.overwriteBackup,
         unzipLimits: settings.unzipLimits,
         signal,
@@ -161,6 +195,8 @@ export class RunExecutor {
   /** Reverses a run. The undo is reported as a run of its own (trigger 'undo'). */
   undo(command: UndoCommand): Promise<RunResult> {
     return this.runExclusive(async () => {
+      const refused = this.deps.guard ? await this.deps.guard.problemWithOutcomes(command.fileOutcomes) : null;
+      if (refused) throw new Error(refused);
       const result = await undoRun(command.fileOutcomes, {
         window: { startedAt: command.startedAt, finishedAt: command.finishedAt },
         originalWasUndo: command.originalWasUndo,

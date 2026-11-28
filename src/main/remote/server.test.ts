@@ -396,3 +396,113 @@ describe('progress events', () => {
     stream.close();
   });
 });
+
+describe('worker endpoints', () => {
+  const pairCalls: unknown[] = [];
+  const accepted: string[] = [];
+  const workers = () => ({
+    pair: (input: unknown) => {
+      pairCalls.push(input);
+      return (input as { code?: string })?.code === 'GOOD'
+        ? { status: 200, body: { ok: true, workerId: 'w', token: 't' } }
+        : { status: 401, body: { ok: false, error: 'That pairing code is not valid.' } };
+    },
+    accept: (conn: { onMessage(h: (t: string) => void): void; send(t: string): void }) => {
+      accepted.push('connection');
+      conn.onMessage((text) => conn.send(`echo:${text}`));
+    },
+  });
+  beforeEach(() => {
+    pairCalls.length = 0;
+    accepted.length = 0;
+  });
+
+  const plain = (body: unknown, headers: http.OutgoingHttpHeaders = {}) =>
+    request('POST', '/api/workers/pair', { headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+
+  /** An upgrade request as a program (no Origin) or a browser (with one) would make it. */
+  function upgrade(headers: Record<string, string> = {}, urlPath = '/api/workers/ws'): Promise<{ head: string; socket: net.Socket }> {
+    return new Promise((resolve, reject) => {
+      const socket = net.connect(port, '127.0.0.1');
+      const key = Buffer.alloc(16, 3).toString('base64');
+      const lines = [
+        `GET ${urlPath} HTTP/1.1`, 'Host: x', 'Upgrade: websocket', 'Connection: Upgrade', `Sec-WebSocket-Key: ${key}`, 'Sec-WebSocket-Version: 13',
+        ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`),
+      ];
+      socket.write(`${lines.join('\r\n')}\r\n\r\n`);
+      let data = '';
+      socket.on('data', (d) => {
+        data += d;
+        if (data.includes('\r\n\r\n')) resolve({ head: data, socket });
+      });
+      socket.on('error', reject);
+      socket.on('close', () => resolve({ head: data, socket }));
+    });
+  }
+
+  it('pairs without a session or the browser header, but never for a browser', async () => {
+    await start({ workers: workers() });
+    const ok = await plain({ code: 'GOOD' });
+    expect(ok.status).toBe(200);
+    expect(JSON.parse(ok.body)).toMatchObject({ ok: true, token: 't' });
+    expect(ok.headers['cache-control']).toBe('no-store');
+    // A request with an Origin header is a web page: refused before the code is even looked at.
+    const fromPage = await plain({ code: 'GOOD' }, { Origin: 'https://evil.example' });
+    expect(fromPage.status).toBe(403);
+    expect(pairCalls).toHaveLength(1);
+    expect((await request('GET', '/api/workers/pair')).status).toBe(405);
+  });
+
+  it('is not there at all without worker support', async () => {
+    await start();
+    expect((await plain({ code: 'GOOD' })).status).toBe(404);
+    const refused = await upgrade();
+    expect(refused.head).toContain('404');
+    refused.socket.destroy();
+  });
+
+  it('slows down repeated wrong codes', async () => {
+    await start({ workers: workers() });
+    let last = 0;
+    for (let i = 0; i < 12; i++) last = (await plain({ code: 'BAD' })).status;
+    expect(last).toBe(429);
+    expect(pairCalls.length).toBeLessThan(12);
+  });
+
+  it('applies the allowed-logins rule to pairing and to the socket', async () => {
+    logins = ['me@example.com'];
+    await start({ workers: workers() });
+    expect((await plain({ code: 'GOOD' })).status).toBe(403);
+    expect((await plain({ code: 'GOOD' }, { 'Tailscale-User-Login': 'other@example.com' })).status).toBe(403);
+    expect((await plain({ code: 'GOOD' }, { 'Tailscale-User-Login': 'Me@Example.com' })).status).toBe(200);
+    const blocked = await upgrade();
+    expect(blocked.head).toContain('403');
+    blocked.socket.destroy();
+    const allowed = await upgrade({ 'Tailscale-User-Login': 'me@example.com' });
+    expect(allowed.head).toContain('101 Switching Protocols');
+    allowed.socket.destroy();
+  });
+
+  it('upgrades only /api/workers/ws, and refuses any upgrade that carries an Origin header', async () => {
+    await start({ workers: workers() });
+    const wrongPath = await upgrade({}, '/api/events');
+    expect(wrongPath.head).toContain('404');
+    wrongPath.socket.destroy();
+    const browser = await upgrade({ Origin: `http://127.0.0.1:${port}` });
+    expect(browser.head).toContain('403');
+    browser.socket.destroy();
+    expect(accepted).toEqual([]);
+    const good = await upgrade();
+    expect(good.head).toContain('101 Switching Protocols');
+    expect(accepted).toEqual(['connection']);
+    good.socket.destroy();
+  });
+
+  it('closes worker sockets when it stops', async () => {
+    await start({ workers: workers() });
+    const good = await upgrade();
+    const closed = new Promise<void>((resolve) => good.socket.on('close', () => resolve()));
+    await server.stop();
+    await closed;
+  });
+});

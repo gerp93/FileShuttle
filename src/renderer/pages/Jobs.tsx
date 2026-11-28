@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { JobRecord, RunAllSummary } from '../../shared/types';
+import { JobRecord, RunAllSummary, WorkerInfo } from '../../shared/types';
 import JobCard from '../components/JobCard';
 
 function matches(record: JobRecord, query: string): boolean {
@@ -19,6 +19,7 @@ function matches(record: JobRecord, query: string): boolean {
 
 export default function Jobs() {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
+  const [machines, setMachines] = useState<WorkerInfo[]>([]);
   const [search, setSearch] = useState('');
   const [summary, setSummary] = useState('');
   const [runningAll, setRunningAll] = useState(false);
@@ -28,6 +29,7 @@ export default function Jobs() {
   };
 
   useEffect(() => {
+    void window.fileshuttleAPI.workers.list().then(setMachines, () => undefined);
     void load();
   }, []);
 
@@ -77,7 +79,12 @@ export default function Jobs() {
       ) : !filtered.length ? (
         <div className="empty-state">No jobs match &quot;{search}&quot;.</div>
       ) : (
-        filtered.map((record) => <JobCard key={record.id} record={record} onChanged={load} />)
+        filtered.map((record) => <JobCard
+            key={record.id}
+            record={record}
+            onChanged={load}
+            machineName={machines.length > 1 ? machines.find((m) => m.id === record.workerId)?.name : undefined}
+          />)
       )}
     </div>
   );

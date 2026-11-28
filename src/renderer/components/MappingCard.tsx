@@ -38,9 +38,11 @@ function accomplished(
 interface Props {
   record: MappingRecord;
   onChanged: () => void;
+  /** Shown as a badge when more than one machine exists. */
+  machineName?: string;
 }
 
-export default function MappingCard({ record, onChanged }: Props) {
+export default function MappingCard({ record, onChanged, machineName }: Props) {
   const navigate = useNavigate();
   const [stats, setStats] = useState<RunStats | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -160,6 +162,7 @@ export default function MappingCard({ record, onChanged }: Props) {
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
         <span className="badge">{record.actionType}</span>
+        {machineName && <span className="badge">🖥 {machineName}</span>}
         {record.actionType !== 'delete' && (
           <span className="badge">{CONFLICT_LABELS[record.conflictPolicy] ?? record.conflictPolicy}</span>
         )}

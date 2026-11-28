@@ -15,6 +15,8 @@ import {
   MappingRecord,
   PurgeResult,
   McpTokenInfo,
+  PairCodeInfo,
+  WorkerInfo,
   RemoteSettingsInput,
   RemoteState,
   RunAllSummary,
@@ -79,9 +81,10 @@ export interface FileShuttleAPI {
   };
   dialogs: {
     pickFolder: (title: string, startAt?: string) => Promise<string | null>;
-    checkFolder: (folder: string, role: FolderRole) => Promise<FolderCheck>;
+    /** `workerId` names the machine whose folders are meant (none = the one running the app). */
+    checkFolder: (folder: string, role: FolderRole, workerId?: string | null) => Promise<FolderCheck>;
     /** Subfolders of a folder (the roots with no path). What the phone's folder browser uses. */
-    listFolder: (folder?: string | null) => Promise<FolderListing>;
+    listFolder: (folder?: string | null, workerId?: string | null) => Promise<FolderListing>;
   };
   shell: {
     openPath: (filePath: string) => Promise<string>;
@@ -103,6 +106,12 @@ export interface FileShuttleAPI {
     setPassword: (password: string) => Promise<RemoteState>;
   };
   /** MCP access tokens (Settings, desktop only). A new token is returned once and never kept. */
+  /** Machines that run jobs (Settings > Machines). */
+  workers: {
+    list: () => Promise<WorkerInfo[]>;
+    createPairCode: () => Promise<PairCodeInfo>;
+    remove: (workerId: string) => Promise<boolean>;
+  };
   mcp: {
     listTokens: () => Promise<McpTokenInfo[]>;
     createToken: (name: string) => Promise<{ name: string; token: string }>;
@@ -168,8 +177,8 @@ const api: FileShuttleAPI = {
   },
   dialogs: {
     pickFolder: (title, startAt) => ipcRenderer.invoke('dialogs:pickFolder', title, startAt),
-    checkFolder: (folder, role) => ipcRenderer.invoke('dialogs:checkFolder', folder, role),
-    listFolder: (folder) => ipcRenderer.invoke('dialogs:listFolder', folder),
+    checkFolder: (folder, role, workerId) => ipcRenderer.invoke('dialogs:checkFolder', folder, role, workerId ?? null),
+    listFolder: (folder, workerId) => ipcRenderer.invoke('dialogs:listFolder', folder, workerId ?? null),
   },
   shell: {
     openPath: (filePath) => ipcRenderer.invoke('shell:openPath', filePath),
@@ -188,6 +197,11 @@ const api: FileShuttleAPI = {
     getSettings: () => ipcRenderer.invoke('remote:getSettings'),
     setSettings: (input) => ipcRenderer.invoke('remote:setSettings', input),
     setPassword: (password) => ipcRenderer.invoke('remote:setPassword', password),
+  },
+  workers: {
+    list: () => ipcRenderer.invoke('workers:list'),
+    createPairCode: () => ipcRenderer.invoke('workers:createPairCode'),
+    remove: (workerId) => ipcRenderer.invoke('workers:remove', workerId),
   },
   mcp: {
     listTokens: () => ipcRenderer.invoke('mcp:listTokens'),

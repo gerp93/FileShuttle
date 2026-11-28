@@ -89,9 +89,21 @@ linuxOnly('the built server bundle', () => {
     expect(refused.status).toBe(2);
     expect(refused.stderr).toContain('not a loopback address');
 
-    const worker = spawnSync(process.execPath, [bundle, 'worker'], { encoding: 'utf8' });
+    // An unpaired worker says so (in an empty data folder of its own, never the real one).
+    const worker = spawnSync(process.execPath, [bundle, 'worker'], {
+      encoding: 'utf8',
+      env: { ...process.env, FILESHUTTLE_WORKER_DATA_DIR: path.join(out, 'worker-data') },
+    });
     expect(worker.status).toBe(2);
-    expect(worker.stderr).toContain('phase 5');
+    expect(worker.stderr).toContain('not paired yet');
+
+    // A plain-http address to another machine is refused before anything is sent.
+    const badPair = spawnSync(process.execPath, [bundle, 'worker', 'pair', '--hub', 'http://example.com', '--code', 'ABCD-EFGH'], {
+      encoding: 'utf8',
+      env: { ...process.env, FILESHUTTLE_WORKER_DATA_DIR: path.join(out, 'worker-data') },
+    });
+    expect(badPair.status).toBe(2);
+    expect(badPair.stderr).toContain('https://');
   });
 
   it('starts, serves the sign-in page and exits 0 on SIGTERM', async () => {

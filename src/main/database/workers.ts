@@ -4,11 +4,11 @@ import { Database, transaction } from './sqlite';
 import { queryAll, queryOne, run, toInt } from './dbHelpers';
 
 /**
- * A worker is a machine that actually moves files. Today there is exactly one, the `local`
- * worker (this PC), and it runs inside the same process as the hub. The rows exist so the
- * data model is ready for more: every mapping, job and run belongs to one worker.
+ * A worker is a machine that actually moves files. The `local` worker runs inside the same
+ * process as the hub; a `remote` worker is another computer, paired with a token (only its hash
+ * is kept here). Every mapping, job and run belongs to one worker.
  */
-export type WorkerKind = 'local';
+export type WorkerKind = 'local' | 'remote';
 
 export interface WorkerRecord {
   id: string;
@@ -22,6 +22,11 @@ export interface WorkerRecord {
   scheduleAckedVersion: number;
   lastSeenAt: string | null;
   createdAt: string;
+  /** `process.platform` of a remote worker's machine, as it reported. */
+  platform: string | null;
+  pairedAt: string | null;
+  /** Set when the machine was removed: its token no longer works. The row stays because run history points at it. */
+  removedAt: string | null;
 }
 
 function rowToWorker(row: Record<string, unknown>): WorkerRecord {
@@ -35,6 +40,9 @@ function rowToWorker(row: Record<string, unknown>): WorkerRecord {
     scheduleAckedVersion: Number(row.schedule_acked_version),
     lastSeenAt: row.last_seen_at ? String(row.last_seen_at) : null,
     createdAt: String(row.created_at),
+    platform: row.platform ? String(row.platform) : null,
+    pairedAt: row.paired_at ? String(row.paired_at) : null,
+    removedAt: row.removed_at ? String(row.removed_at) : null,
   };
 }
 
@@ -71,8 +79,68 @@ export function getWorker(db: Database, workerId: string): WorkerRecord | null {
   return row ? rowToWorker(row) : null;
 }
 
-export function listWorkers(db: Database): WorkerRecord[] {
-  return queryAll(db, 'SELECT * FROM workers ORDER BY created_at, id').map(rowToWorker);
+/** The workers that can be used. A removed machine is left out unless asked for (its history still names it). */
+export function listWorkers(db: Database, includeRemoved = false): WorkerRecord[] {
+  const where = includeRemoved ? '' : 'WHERE removed_at IS NULL';
+  return queryAll(db, `SELECT * FROM workers ${where} ORDER BY created_at, id`).map(rowToWorker);
+}
+
+const NAME_MAX = 60;
+
+/** A machine name from outside: control characters out, trimmed, never empty. */
+export function cleanWorkerName(raw: unknown, fallback = 'Remote machine'): string {
+  // eslint-disable-next-line no-control-regex
+  const text = typeof raw === 'string' ? raw.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim() : '';
+  return (text || fallback).slice(0, NAME_MAX);
+}
+
+/** The name, with " (2)", " (3)" ... added when another machine in use already has it. */
+function uniqueWorkerName(db: Database, name: string): string {
+  const taken = new Set(listWorkers(db).map((w) => w.name.toLowerCase()));
+  if (!taken.has(name.toLowerCase())) return name;
+  for (let n = 2; ; n++) {
+    const candidate = `${name.slice(0, NAME_MAX - 5)} (${n})`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+/** Adds a paired machine. Only the hash of its token is stored. */
+export function createRemoteWorker(
+  db: Database,
+  info: { name: string; tokenHash: string; platform?: string | null },
+  whenIso: string
+): WorkerRecord {
+  const id = randomUUID();
+  const name = uniqueWorkerName(db, cleanWorkerName(info.name));
+  run(
+    db,
+    "INSERT INTO workers (id, name, kind, token_hash, platform, paired_at, created_at) VALUES (?, ?, 'remote', ?, ?, ?, ?)",
+    [id, name, info.tokenHash, info.platform ?? null, whenIso, whenIso]
+  );
+  return getWorker(db, id)!;
+}
+
+/** The stored token hash of a machine that is still paired, else null. */
+export function getWorkerTokenHash(db: Database, workerId: string): string | null {
+  const row = queryOne(
+    db,
+    "SELECT token_hash FROM workers WHERE id = ? AND kind = 'remote' AND removed_at IS NULL AND token_hash IS NOT NULL",
+    [workerId]
+  );
+  return row?.token_hash ? String(row.token_hash) : null;
+}
+
+/** Cuts a machine off: its token hash is deleted, so nothing can connect as it again. The row stays for history. */
+export function revokeWorker(db: Database, workerId: string, whenIso: string): void {
+  run(db, "UPDATE workers SET token_hash = NULL, removed_at = ? WHERE id = ? AND kind = 'remote'", [whenIso, workerId]);
+  run(db, 'DELETE FROM pending_runs WHERE worker_id = ?', [workerId]);
+}
+
+/** How many mappings and jobs a worker owns. */
+export function workerLoad(db: Database, workerId: string): { mappings: number; jobs: number } {
+  const count = (table: string): number =>
+    Number(queryOne(db, `SELECT COUNT(*) AS n FROM ${table} WHERE worker_id = ?`, [workerId])?.n ?? 0);
+  return { mappings: count('mappings'), jobs: count('jobs') };
 }
 
 /**
@@ -96,15 +164,14 @@ export function setScheduleAcked(db: Database, workerId: string, version: number
 export function recordWorkerHello(
   db: Database,
   workerId: string,
-  info: { appVersion: string; protocolVersion: number },
+  info: { appVersion: string; protocolVersion: number; platform?: string | null },
   whenIso: string
 ): void {
-  run(db, 'UPDATE workers SET app_version = ?, protocol_version = ?, last_seen_at = ? WHERE id = ?', [
-    info.appVersion,
-    info.protocolVersion,
-    whenIso,
-    workerId,
-  ]);
+  run(
+    db,
+    'UPDATE workers SET app_version = ?, protocol_version = ?, last_seen_at = ?, platform = COALESCE(?, platform) WHERE id = ?',
+    [info.appVersion, info.protocolVersion, whenIso, info.platform ?? null, workerId]
+  );
 }
 
 export function touchWorker(db: Database, workerId: string, whenIso: string): void {
@@ -115,4 +182,54 @@ export function touchWorker(db: Database, workerId: string, whenIso: string): vo
 export function ownerOf(db: Database, table: 'mappings' | 'jobs', id: number): string | null {
   const row = queryOne(db, `SELECT worker_id FROM ${table} WHERE id = ?`, [id]);
   return row?.worker_id ? String(row.worker_id) : null;
+}
+
+// "Run now" requests waiting for a machine that is offline -------------------------------------
+
+export interface QueuedRun {
+  jobId: number;
+  workerId: string;
+  trigger: 'manual' | 'scheduled';
+  queuedAt: string;
+}
+
+/** Remembers a run for a machine that is offline. A job already waiting is not added twice; returns false then. */
+export function queueRun(db: Database, entry: { jobId: number; workerId: string; trigger: 'manual' | 'scheduled' }, whenIso: string): boolean {
+  const before = queryOne(db, 'SELECT 1 AS x FROM pending_runs WHERE job_id = ?', [entry.jobId]);
+  if (before) return false;
+  run(db, 'INSERT INTO pending_runs (job_id, worker_id, trigger, queued_at) VALUES (?, ?, ?, ?)', [
+    entry.jobId,
+    entry.workerId,
+    entry.trigger,
+    whenIso,
+  ]);
+  return true;
+}
+
+function rowToQueued(row: Record<string, unknown>): QueuedRun {
+  return {
+    jobId: Number(row.job_id),
+    workerId: String(row.worker_id),
+    trigger: row.trigger === 'scheduled' ? 'scheduled' : 'manual',
+    queuedAt: String(row.queued_at),
+  };
+}
+
+export function listQueuedRuns(db: Database, workerId?: string): QueuedRun[] {
+  const rows = workerId
+    ? queryAll(db, 'SELECT * FROM pending_runs WHERE worker_id = ? ORDER BY queued_at, job_id', [workerId])
+    : queryAll(db, 'SELECT * FROM pending_runs ORDER BY queued_at, job_id');
+  return rows.map(rowToQueued);
+}
+
+export function getQueuedRun(db: Database, jobId: number): QueuedRun | null {
+  const row = queryOne(db, 'SELECT * FROM pending_runs WHERE job_id = ?', [jobId]);
+  return row ? rowToQueued(row) : null;
+}
+
+/** Forgets a queued run. Returns whether there was one. */
+export function removeQueuedRun(db: Database, jobId: number): boolean {
+  const existed = !!queryOne(db, 'SELECT 1 AS x FROM pending_runs WHERE job_id = ?', [jobId]);
+  if (existed) run(db, 'DELETE FROM pending_runs WHERE job_id = ?', [jobId]);
+  return existed;
 }

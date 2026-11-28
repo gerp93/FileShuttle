@@ -10,12 +10,16 @@ interface Props {
   role: FolderRole;
   browseTitle: string;
   onChange: (value: string) => void;
+  /** The machine the folder is on. Absent: the one running the app. */
+  workerId?: string | null;
+  /** True for a machine other than this one: its folders can only be browsed in the page. */
+  remote?: boolean;
 }
 
 const CHECK_DELAY_MS = 350;
 
 /** A folder path you can type or paste into, check as you go, or pick with Browse (which opens at the current value). */
-export default function FolderField({ label, value, role, browseTitle, onChange }: Props) {
+export default function FolderField({ label, value, role, browseTitle, onChange, workerId, remote }: Props) {
   const [check, setCheck] = useState<FolderCheck | null>(null);
   const [browsing, setBrowsing] = useState(false);
 
@@ -26,7 +30,7 @@ export default function FolderField({ label, value, role, browseTitle, onChange 
     }
     let stale = false;
     const timer = setTimeout(() => {
-      void window.fileshuttleAPI.dialogs.checkFolder(value, role).then(
+      void window.fileshuttleAPI.dialogs.checkFolder(value, role, workerId ?? null).then(
         (result) => {
           if (!stale) setCheck(result);
         },
@@ -39,11 +43,11 @@ export default function FolderField({ label, value, role, browseTitle, onChange 
       stale = true;
       clearTimeout(timer);
     };
-  }, [value, role]);
+  }, [value, role, workerId]);
 
   const browse = async () => {
-    // On the phone there is no native dialog: browse the PC's folders in the page instead.
-    if (isWebMode()) {
+    // On the phone there is no native dialog, and another machine's folders are not on this one: browse in the page.
+    if (isWebMode() || remote) {
       setBrowsing(true);
       return;
     }
@@ -76,6 +80,7 @@ export default function FolderField({ label, value, role, browseTitle, onChange 
         <FolderBrowserDialog
           title={browseTitle}
           startAt={value}
+          workerId={workerId}
           onCancel={() => setBrowsing(false)}
           onPick={(picked) => {
             setBrowsing(false);

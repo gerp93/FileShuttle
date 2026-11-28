@@ -68,6 +68,8 @@ export interface RunResult {
   filesZipped: number;
   /** Set when the run was stopped early by the user. Not stored in history. */
   cancelled?: boolean;
+  /** Set when "Run now" was queued for a machine that is offline: nothing ran yet, it will when the machine reconnects. */
+  queuedFor?: string;
 }
 
 export interface MappingRecord {
@@ -196,6 +198,8 @@ export interface RunSummary {
 }
 
 export interface CreateMappingInput {
+  /** The machine this mapping's folders are on. Absent: the local worker (this computer, or the hub's own). */
+  workerId?: string;
   name: string;
   sourcePath: string;
   destPath: string;
@@ -278,6 +282,31 @@ export interface McpTokenInfo {
   name: string;
   createdAt: string;
   lastUsedAt: string | null;
+}
+
+/** A machine (worker) as shown in Settings > Machines and in the machine pickers. */
+export interface WorkerInfo {
+  id: string;
+  name: string;
+  kind: 'local' | 'remote';
+  /** `process.platform` as the machine reported it, e.g. "linux" or "win32". */
+  platform: string | null;
+  appVersion: string | null;
+  online: boolean;
+  lastSeenAt: string | null;
+  /** Set when the machine runs an older app version than the hub. */
+  versionNotice: string | null;
+  mappingCount: number;
+  jobCount: number;
+  /** Runs queued for this machine while it is offline. */
+  queuedRunCount: number;
+}
+
+/** A one-time code for pairing a machine. Shown once. */
+export interface PairCodeInfo {
+  /** XXXX-XXXX. */
+  code: string;
+  expiresAt: string;
 }
 
 export const DEFAULT_REMOTE_PORT = 8765;
@@ -401,6 +430,8 @@ export interface RunProgressEvent {
   scanned: number;
   processed: number;
   total: number | null;
+  /** Phase 'queued' only: the name of the offline machine this run waits for (absent: waiting for another run). */
+  waitingFor?: string;
 }
 
 /** Bounds on what unzip will extract, so a hostile or accidental "zip bomb" can't fill the disk. */

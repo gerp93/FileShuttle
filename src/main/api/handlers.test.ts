@@ -28,6 +28,7 @@ const LEGACY_CHANNELS = [
 const NEW_CHANNELS = [
   'dialogs:listFolder', 'remote:getSettings', 'remote:setSettings', 'remote:setPassword',
   'mcp:listTokens', 'mcp:createToken', 'mcp:revokeToken',
+  'workers:list', 'workers:createPairCode', 'workers:remove',
 ];
 
 function makeHandlers(db: Database | null = null) {

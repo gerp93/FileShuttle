@@ -26,7 +26,9 @@ function relativeTime(iso: string): string {
 }
 
 function progressLine(p: RunProgressEvent): string {
-  if (p.phase === 'queued') return 'Waiting for another job to finish…';
+  if (p.phase === 'queued') {
+    return p.waitingFor ? `Waiting for ${p.waitingFor} to come online…` : 'Waiting for another job to finish…';
+  }
   const step = p.stepCount > 1 ? `Step ${p.stepIndex} of ${p.stepCount} (${p.stepName}) · ` : '';
   if (p.phase === 'scanning' || p.total == null) return `${step}Scanning… ${p.scanned.toLocaleString()} files found`;
   return `${step}${p.processed.toLocaleString()} of ${p.total.toLocaleString()} files`;
@@ -35,9 +37,11 @@ function progressLine(p: RunProgressEvent): string {
 interface Props {
   record: JobRecord;
   onChanged: () => void;
+  /** Shown as a badge when more than one machine exists. */
+  machineName?: string;
 }
 
-export default function JobCard({ record, onChanged }: Props) {
+export default function JobCard({ record, onChanged, machineName }: Props) {
   const navigate = useNavigate();
   const [stats, setStats] = useState<RunStats | null>(null);
   const [status, setStatus] = useState('');
@@ -87,6 +91,13 @@ export default function JobCard({ record, onChanged }: Props) {
     setRunning(true);
     try {
       const result = await window.fileshuttleAPI.jobs.run(record.id);
+      if (result.queuedFor) {
+        // Nothing ran: it will when that machine connects. The card shows the wait until then.
+        setStatus('');
+        const active = await window.fileshuttleAPI.jobs.getActive();
+        setProgress(active.find((event) => event.jobId === record.id) ?? null);
+        return;
+      }
       setStatus(
         (result.cancelled ? 'Cancelled — ' : '') +
           `Moved ${result.filesMoved}, copied ${result.filesCopied}, deleted ${result.filesDeleted}, zipped ${result.filesZipped}, extracted ${result.filesExtracted}, skipped ${result.filesSkipped}, errored ${result.filesErrored}`
@@ -159,6 +170,7 @@ export default function JobCard({ record, onChanged }: Props) {
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
         <span className="badge">⏱ {scheduleSummary(record)}</span>
+        {machineName && <span className="badge">🖥 {machineName}</span>}
         <span className="badge">
           {record.steps.length} mapping{record.steps.length !== 1 ? 's' : ''}
         </span>

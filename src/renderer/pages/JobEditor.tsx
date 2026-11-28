@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { MAX_DAILY_TIMES, validateJobInput } from '../../shared/schedule';
-import { CreateJobInput, MappingRecord } from '../../shared/types';
+import { CreateJobInput, MappingRecord, WorkerInfo } from '../../shared/types';
 import { errorMessage } from '../utils/errors';
 
 const SCHEDULE_TYPES = [
@@ -25,11 +25,13 @@ export default function JobEditor() {
   const [dailyTimes, setDailyTimes] = useState<string[]>(['09:00']);
   const [mappingIds, setMappingIds] = useState<number[]>([]);
   const [allMappings, setAllMappings] = useState<MappingRecord[]>([]);
+  const [workers, setWorkers] = useState<WorkerInfo[]>([]);
   const [addId, setAddId] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
     void window.fileshuttleAPI.mappings.list().then(setAllMappings);
+    void window.fileshuttleAPI.workers.list().then(setWorkers, () => undefined);
     if (jobId) {
       void window.fileshuttleAPI.jobs.get(jobId).then((record) => {
         if (!record) return;
@@ -100,7 +102,16 @@ export default function JobEditor() {
     setMappingIds(next);
   };
 
-  const available = allMappings.filter((m) => !mappingIds.includes(m.id));
+  // A job runs on one machine, so once a mapping is in it only that machine's mappings can be added.
+  const jobWorkerId = mappingIds.map((mid) => byId(mid)?.workerId).find((w) => w !== undefined) ?? null;
+  const machineName = (workerId: string) => workers.find((w) => w.id === workerId)?.name ?? '';
+  const severalMachines = workers.length > 1;
+  const available = allMappings.filter(
+    (m) => !mappingIds.includes(m.id) && (jobWorkerId === null || m.workerId === jobWorkerId)
+  );
+  const hiddenOther = allMappings.filter(
+    (m) => !mappingIds.includes(m.id) && jobWorkerId !== null && m.workerId !== jobWorkerId
+  ).length;
 
   return (
     <div>
@@ -223,12 +234,22 @@ export default function JobEditor() {
             <select value={addId} onChange={(e) => setAddId(e.target.value)}>
               <option value="">Choose a mapping…</option>
               {available.map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                  {severalMachines ? ` (${machineName(m.workerId)})` : ''}
+                </option>
               ))}
             </select>
           </label>
           <button className="outline" onClick={addMapping} disabled={!addId}>Add</button>
         </div>
+      )}
+
+      {severalMachines && jobWorkerId !== null && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          This job runs on {machineName(jobWorkerId)}, so only that machine&apos;s mappings can be added
+          {hiddenOther > 0 ? ` (${hiddenOther} on other machines are not shown)` : ''}.
+        </p>
       )}
 
       <p className="muted" style={{ marginTop: 8 }}>

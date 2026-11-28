@@ -22,7 +22,7 @@ import type {
  */
 
 /** Bumped when a message changes in a way an older side cannot read. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** A worker sends a heartbeat this often. */
 export const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -46,6 +46,8 @@ export interface HelloMessage {
   protocolVersion: number;
   /** The newest schedule version the worker has applied (0 = none yet). */
   scheduleVersion: number;
+  /** `process.platform` of the worker's machine (shown on the Machines list). */
+  platform?: string;
 }
 
 /** "I applied schedule version N." */
@@ -203,7 +205,21 @@ export type HubCommand =
   | ListFolderCommand
   | CheckFolderCommand;
 
-export type HubToWorker = ScheduleMessage | HubCommand;
+/**
+ * "I have stored this." Sent after the hub has written a runFinished (id = its runUid) or a
+ * jobFinished (id = `job:<jobId>:<startedAt>`), so a worker with an outbox may forget it.
+ */
+export interface AckMessage {
+  type: 'ack';
+  id: string;
+}
+
+/** The id an `ack` carries for a jobFinished message. */
+export function jobFinishedAckId(message: { jobId: number; startedAt: string }): string {
+  return `job:${message.jobId}:${message.startedAt}`;
+}
+
+export type HubToWorker = ScheduleMessage | AckMessage | HubCommand;
 
 export type ProtocolMessage = WorkerToHub | HubToWorker;
 
@@ -222,6 +238,7 @@ export const WORKER_TO_HUB_TYPES = [
 
 export const HUB_TO_WORKER_TYPES = [
   'schedule',
+  'ack',
   'runNow',
   'cancel',
   'preview',

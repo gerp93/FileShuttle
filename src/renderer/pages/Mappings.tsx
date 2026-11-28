@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { MappingRecord } from '../../shared/types';
+import { MappingRecord, WorkerInfo } from '../../shared/types';
 import MappingCard from '../components/MappingCard';
 
 function matches(record: MappingRecord, query: string): boolean {
@@ -15,6 +15,7 @@ function matches(record: MappingRecord, query: string): boolean {
 
 export default function Mappings() {
   const [mappings, setMappings] = useState<MappingRecord[]>([]);
+  const [machines, setMachines] = useState<WorkerInfo[]>([]);
   const [search, setSearch] = useState('');
 
   const load = async () => {
@@ -22,6 +23,7 @@ export default function Mappings() {
   };
 
   useEffect(() => {
+    void window.fileshuttleAPI.workers.list().then(setMachines, () => undefined);
     void load();
   }, []);
 
@@ -56,7 +58,12 @@ export default function Mappings() {
         <div className="empty-state">No mappings match &quot;{search}&quot;.</div>
       ) : (
         filtered.map((record) => (
-          <MappingCard key={record.id} record={record} onChanged={load} />
+          <MappingCard
+            key={record.id}
+            record={record}
+            onChanged={load}
+            machineName={machines.length > 1 ? machines.find((m) => m.id === record.workerId)?.name : undefined}
+          />
         ))
       )}
     </div>
