@@ -44,7 +44,7 @@ describe('the server entry does not import Electron', () => {
     expect(files.size).toBeGreaterThan(20); // the walk really followed the imports
     const forbidden = [...bare.entries()].filter(([spec]) => /^(electron|electron-|@anthropic-ai\/)/.test(spec));
     expect(forbidden).toEqual([]);
-    const names = [...files].map((f) => path.relative(ROOT, f));
+    const names = [...files].map((f) => path.relative(ROOT, f).split(path.sep).join('/'));
     for (const desktopOnly of ['src/main/main.ts', 'src/main/preload.ts', 'src/main/menu.ts', 'src/main/electronPaths.ts', 'src/main/electronTrash.ts']) {
       expect(names).not.toContain(desktopOnly);
     }
