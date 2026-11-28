@@ -47,7 +47,7 @@ jobs:
       package_name: fileshuttle-server
       command_name: fileshuttle-server
       description: FileShuttle hub and worker server (no desktop app needed)
-      build_command: npm ci && npm run build:server && npm run build:renderer
+      build_command: npm ci && npm run generate-icons && npm run build:server && npm run build:renderer
       bundle: dist/server/fileshuttle-server.cjs
       install_map: |
         dist/renderer /usr/lib/fileshuttle-server/web
