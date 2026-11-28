@@ -190,10 +190,24 @@ export class RemoteTransport implements WorkerEndpoint {
         this.log(`A message from the hub could not be handled: ${err instanceof Error ? err.message : err}`);
       }
     };
+    // Normally an error is followed by a close event with the details. Node 22's WebSocket gives an error and NO
+    // close event when a connection cannot be made (hub down, refused), so without this the worker would never
+    // try again, and a process with nothing left to wait for would simply exit. So an error that is not followed
+    // by a close soon is treated as one.
+    let ended = false;
     socket.onerror = () => {
-      // The close event follows with the details.
+      setTimeout(() => {
+        try {
+          socket.close();
+        } catch {
+          // Already gone.
+        }
+        socket.onclose?.({ code: 1006, reason: '' });
+      }, 500); // not unref'd: until it fires nothing else would keep a worker process alive
     };
     socket.onclose = (event) => {
+      if (ended) return;
+      ended = true;
       if (this.socket === socket) this.socket = null;
       if (this.stopped) return;
       this.log(this.openedAt ? describeClose(event.code, event.reason) : `Could not connect to the hub at ${this.url.replace(/\/api\/.*/, '')}.`);
