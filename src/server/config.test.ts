@@ -61,6 +61,11 @@ linuxOnly('userArgs', () => {
     expect(userArgs([exe, exe, 'all'], exe)).toEqual(['all']);
     expect(userArgs([exe, 'all'], exe)).toEqual(['all']);
   });
+  it('skips argv[1] in a single executable, even a bare name typed from PATH', () => {
+    const exe = '/usr/lib/fileshuttle-server/fileshuttle-server';
+    expect(userArgs([exe, 'fileshuttle-server', '--version'], exe, true)).toEqual(['--version']);
+    expect(userArgs([exe, '/usr/bin/fileshuttle-server', 'all'], exe, true)).toEqual(['all']);
+  });
   it('treats the /usr/bin symlink as the executable itself', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fs-args-'));
     try {

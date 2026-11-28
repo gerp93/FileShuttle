@@ -33,7 +33,20 @@ function sameFile(a: string, b: string): boolean {
   return real(a) === real(b);
 }
 
-export function userArgs(argv: string[], execPath: string = process.execPath): string[] {
+/** True when running as a Node single executable. Electron's Node and older Node have no node:sea. */
+function runningAsSea(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return (require('node:sea') as { isSea(): boolean }).isSea();
+  } catch {
+    return false;
+  }
+}
+
+export function userArgs(argv: string[], execPath: string = process.execPath, isSea: boolean = runningAsSea()): string[] {
+  // A single executable always gets its own name again in argv[1], exactly as typed: a bare
+  // `fileshuttle-server` when run from PATH, which no path comparison can match. So skip it outright.
+  if (isSea) return argv.slice(2);
   const first = argv[1];
   // A single executable can see its own path again in argv[1], as typed: through the /usr/bin symlink, while
   // execPath is the real file under /usr/lib. Compare real paths, or `fileshuttle-server --version` reads the
