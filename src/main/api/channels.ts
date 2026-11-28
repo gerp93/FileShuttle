@@ -72,4 +72,12 @@ export const DESKTOP_CHANNELS: readonly string[] = [
   'mcp:listTokens',
   'mcp:createToken',
   'mcp:revokeToken',
+  // Connecting this computer to a hub (pairing, its allowed folders, sending its jobs) is done on the PC only.
+  'hubLink:getState',
+  'hubLink:connect',
+  'hubLink:disconnect',
+  'hubLink:setAllowedFolders',
+  'hubLink:suggestFolders',
+  'hubLink:sendDefinitions',
+  'hubLink:openHub',
 ];

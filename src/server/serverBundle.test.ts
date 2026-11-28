@@ -106,6 +106,52 @@ linuxOnly('the built server bundle', () => {
     expect(badPair.stderr).toContain('https://');
   });
 
+  it('a paired worker keeps trying while its hub is away instead of exiting (the bundle on both sides)', async () => {
+    const port = await new Promise<number>((resolve) => {
+      const probe = net.createServer().listen(0, '127.0.0.1', () => {
+        const p = (probe.address() as net.AddressInfo).port;
+        probe.close(() => resolve(p));
+      });
+    });
+    writeFile(path.join(out, 'web-away', 'index.html'), '<!doctype html><title>FileShuttle</title>');
+    const hubEnv = {
+      ...process.env,
+      FILESHUTTLE_SERVER_DATA_DIR: path.join(out, 'away-hub'),
+      FILESHUTTLE_SERVER_WEB_DIR: path.join(out, 'web-away'),
+      FILESHUTTLE_SERVER_PORT: String(port),
+    };
+    const workerEnv = { ...process.env, FILESHUTTLE_WORKER_DATA_DIR: path.join(out, 'away-worker') };
+    const hub = spawn(process.execPath, [bundle, 'hub'], { env: hubEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    let hubOut = '';
+    hub.stdout.on('data', (d) => (hubOut += d));
+    hub.stderr.on('data', (d) => (hubOut += d));
+    let worker: ReturnType<typeof spawn> | null = null;
+    try {
+      const deadline = Date.now() + 20_000;
+      while (!hubOut.includes('listening on') && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      const made = spawnSync(process.execPath, [bundle, 'pair-code'], { encoding: 'utf8', env: hubEnv });
+      expect(made.status).toBe(0);
+      const paired = spawnSync(process.execPath, [bundle, 'worker', 'pair', '--hub', `http://127.0.0.1:${port}`, '--code', made.stdout.trim()], {
+        encoding: 'utf8',
+        env: workerEnv,
+      });
+      expect(paired.status, paired.stderr).toBe(0);
+
+      // The hub goes away, and only then does the worker start: all it has left is its retry timer.
+      const hubExited = new Promise((resolve) => hub.on('exit', resolve));
+      hub.kill('SIGKILL');
+      await hubExited;
+      worker = spawn(process.execPath, [bundle, 'worker'], { env: workerEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+      let exitCode: number | null | undefined;
+      worker.on('exit', (code) => (exitCode = code));
+      await new Promise((r) => setTimeout(r, 4000));
+      expect(exitCode, 'the worker must stay up while its hub is unreachable').toBeUndefined();
+    } finally {
+      worker?.kill('SIGKILL');
+      hub.kill('SIGKILL');
+    }
+  }, 60_000);
+
   it('starts, serves the sign-in page and exits 0 on SIGTERM', async () => {
     const port = await new Promise<number>((resolve) => {
       const probe = net.createServer().listen(0, '127.0.0.1', () => {

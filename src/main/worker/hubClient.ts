@@ -210,10 +210,10 @@ export class RemoteTransport implements WorkerEndpoint {
     const max = this.opts.backoffMaxMs ?? 60_000;
     const wait = Math.min(max, start * 2 ** Math.min(this.attempt, 10));
     this.attempt++;
+    // Not unref'd: while the hub is out of reach this timer is all that keeps a worker process alive.
     this.timer = setTimeout(() => {
       this.timer = null;
       this.open();
     }, wait);
-    this.timer.unref?.();
   }
 }

@@ -119,3 +119,27 @@ export function createScheduleStore(dataDir: string): ScheduleStore {
     },
   };
 }
+
+/** Saves the folders this machine allows, keeping the rest of the file. */
+export function saveAllowedFolders(dataDir: string, folders: readonly string[]): void {
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const next: WorkerConfigFile = { ...readFile(dataDir), allowedFolders: [...folders] };
+  const file = path.join(dataDir, CONFIG_FILE);
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(next, null, 2)}
+`, { mode: 0o600 });
+  fs.renameSync(temp, file);
+}
+
+/** Forgets the pairing (hub address and machine id), keeping the allowed folders the person chose. */
+export function clearPairing(dataDir: string): void {
+  const { hubUrl: _hubUrl, workerId: _workerId, ...rest } = readFile(dataDir);
+  void _hubUrl;
+  void _workerId;
+  const file = path.join(dataDir, CONFIG_FILE);
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(rest, null, 2)}
+`, { mode: 0o600 });
+  fs.renameSync(temp, file);
+}

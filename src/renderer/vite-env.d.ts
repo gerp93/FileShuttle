@@ -15,6 +15,7 @@ import type {
   LogRetentionId,
   MappingRecord,
   PurgeResult,
+  HubLinkState,
   McpTokenInfo,
   PairCodeInfo,
   WorkerInfo,
@@ -117,6 +118,16 @@ interface FileShuttleAPI {
     listTokens: () => Promise<McpTokenInfo[]>;
     createToken: (name: string) => Promise<{ name: string; token: string }>;
     revokeToken: (name: string) => Promise<boolean>;
+  };
+  /** Connect this computer to a hub on another computer, so it runs the hub's jobs (Settings, desktop only). */
+  hubLink: {
+    getState: () => Promise<HubLinkState>;
+    connect: (input: { hubUrl: string; code: string; name?: string }) => Promise<HubLinkState>;
+    disconnect: () => Promise<HubLinkState>;
+    setAllowedFolders: (folders: string[]) => Promise<HubLinkState>;
+    suggestFolders: () => Promise<string[]>;
+    sendDefinitions: (switchOff: boolean) => Promise<{ mappings: number; jobs: number }>;
+    openHub: () => Promise<void>;
   };
   updates: {
     check: () => Promise<UpdateCheckResult>;

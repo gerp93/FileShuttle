@@ -3,6 +3,7 @@ import { HubToWorker, PROTOCOL_VERSION, WORKER_OFFLINE_AFTER_MS, WORKER_TO_HUB_T
 import type { WebSocketConnection } from '../net/webSocket';
 import type { Hub, HubEndpoint } from './hub';
 import { BAD_CODE_MESSAGE, redeemPairingCode, verifyWorkerToken } from './pairing';
+import { ImportError, importDefinitions } from './importDefinitions';
 
 /**
  * The hub's door for remote workers: it turns an upgraded WebSocket into a `HubEndpoint` once
@@ -32,6 +33,8 @@ export interface GatewayOptions {
   helloTimeoutMs?: number;
   pingEveryMs?: number;
   silentAfterMs?: number;
+  /** Called after an import changed what a worker should run (the hub sends it the new schedule). */
+  afterImport?: () => void;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -100,6 +103,24 @@ export class WorkerGateway {
     if (!result.ok) return { status: 401, body: { ok: false, error: BAD_CODE_MESSAGE } };
     this.log(`paired machine "${result.worker.name}"`);
     return { status: 200, body: { ok: true, workerId: result.worker.id, name: result.worker.name, token: result.token } };
+  };
+
+  /** POST /api/workers/import: a paired machine brings its existing mappings and jobs along. */
+  importDefinitions = (workerId: string, token: string, body: unknown): { status: number; body: unknown } => {
+    const db = this.opts.getDb();
+    // The same answer for an unknown machine, a removed one and a wrong token.
+    if (workerId.length > 100 || token.length > 200 || !verifyWorkerToken(db, workerId, token)) {
+      return { status: 401, body: { ok: false, error: NOT_ACCEPTED_MESSAGE } };
+    }
+    try {
+      const result = importDefinitions(db, workerId, body as Parameters<typeof importDefinitions>[2]);
+      this.log(`imported ${result.mappings} mapping(s) and ${result.jobs} job(s) for worker ${workerId}`);
+      this.opts.afterImport?.();
+      return { status: 200, body: { ok: true, ...result } };
+    } catch (err) {
+      if (err instanceof ImportError) return { status: 400, body: { ok: false, error: err.message } };
+      throw err;
+    }
   };
 
   /** A worker's WebSocket, just upgraded. */

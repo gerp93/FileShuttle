@@ -309,6 +309,24 @@ export interface PairCodeInfo {
   expiresAt: string;
 }
 
+/** This desktop app's link to a hub on another computer (Settings > Connect to a hub). Never holds the token. */
+export interface HubLinkState {
+  /** Paired with a hub: this computer runs the hub's jobs and its own are paused. */
+  paired: boolean;
+  hubUrl: string | null;
+  /** The name this computer has on the hub. */
+  name: string | null;
+  workerId: string | null;
+  /** Connected to the hub right now. */
+  online: boolean;
+  /** Finished runs not yet taken by the hub (they are delivered when it is reachable). */
+  queuedReports: number;
+  /** The folders this computer lets the hub's jobs touch. Empty: every folder is refused. */
+  allowedFolders: string[];
+  /** Something the person should know (no allowed folders, a missing token), or null. */
+  problem: string | null;
+}
+
 export const DEFAULT_REMOTE_PORT = 8765;
 export const MIN_REMOTE_PASSWORD_LENGTH = 8;
 

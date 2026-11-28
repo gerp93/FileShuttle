@@ -123,7 +123,12 @@ export class Hub {
 
   private dropLink(workerId: string, link: WorkerLink, reason: string, closeEndpoint: boolean): void {
     if (this.links.get(workerId) === link) this.links.delete(workerId);
-    const name = getWorker(this.db, workerId)?.name ?? 'The machine';
+    let name = 'The machine';
+    try {
+      name = getWorker(this.db, workerId)?.name ?? name;
+    } catch {
+      // The database is already closed (the server is stopping and this socket closed after it).
+    }
     for (const [requestId, entry] of [...this.pending]) {
       if (entry.workerId !== workerId) continue;
       this.pending.delete(requestId);

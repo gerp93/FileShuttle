@@ -14,6 +14,7 @@ import {
   LogRetentionId,
   MappingRecord,
   PurgeResult,
+  HubLinkState,
   McpTokenInfo,
   PairCodeInfo,
   WorkerInfo,
@@ -117,6 +118,16 @@ export interface FileShuttleAPI {
     createToken: (name: string) => Promise<{ name: string; token: string }>;
     revokeToken: (name: string) => Promise<boolean>;
   };
+  /** Connect this computer to a hub on another computer, so it runs the hub's jobs (Settings, desktop only). */
+  hubLink: {
+    getState: () => Promise<HubLinkState>;
+    connect: (input: { hubUrl: string; code: string; name?: string }) => Promise<HubLinkState>;
+    disconnect: () => Promise<HubLinkState>;
+    setAllowedFolders: (folders: string[]) => Promise<HubLinkState>;
+    suggestFolders: () => Promise<string[]>;
+    sendDefinitions: (switchOff: boolean) => Promise<{ mappings: number; jobs: number }>;
+    openHub: () => Promise<void>;
+  };
   updates: {
     check: () => Promise<UpdateCheckResult>;
   };
@@ -207,6 +218,15 @@ const api: FileShuttleAPI = {
     listTokens: () => ipcRenderer.invoke('mcp:listTokens'),
     createToken: (name) => ipcRenderer.invoke('mcp:createToken', name),
     revokeToken: (name) => ipcRenderer.invoke('mcp:revokeToken', name),
+  },
+  hubLink: {
+    getState: () => ipcRenderer.invoke('hubLink:getState'),
+    connect: (input) => ipcRenderer.invoke('hubLink:connect', input),
+    disconnect: () => ipcRenderer.invoke('hubLink:disconnect'),
+    setAllowedFolders: (folders) => ipcRenderer.invoke('hubLink:setAllowedFolders', folders),
+    suggestFolders: () => ipcRenderer.invoke('hubLink:suggestFolders'),
+    sendDefinitions: (switchOff) => ipcRenderer.invoke('hubLink:sendDefinitions', switchOff),
+    openHub: () => ipcRenderer.invoke('hubLink:openHub'),
   },
   updates: {
     check: () => ipcRenderer.invoke('updates:check'),

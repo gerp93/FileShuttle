@@ -74,9 +74,14 @@ export async function startServer(
     getLogPath: () => callLogPath(config.dataDir),
   });
 
-  const gateway = new WorkerGateway({ getDb: () => db, hub, log: (message) => log(`workers: ${message}`) });
+  const gateway = new WorkerGateway({
+    getDb: () => db,
+    hub,
+    log: (message) => log(`workers: ${message}`),
+    afterImport: () => hub.syncSchedules(),
+  });
   const web = new RemoteServer({
-    workers: { pair: gateway.pair, accept: gateway.accept },
+    workers: { pair: gateway.pair, accept: gateway.accept, importDefinitions: gateway.importDefinitions },
     port: config.port,
     host: config.host,
     staticDir: config.webDir,
