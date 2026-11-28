@@ -57,3 +57,22 @@ jobs:
       version: ${{ needs.tag.outputs.version }}
     permissions:
       contents: write
+
+  node-deb:
+    needs: [tag, release]
+    uses: gerp93/KVG_Standards/.github/workflows/release-node-deb.yml@main
+    with:
+      version: ${{ needs.tag.outputs.version }}
+      package_name: fileshuttle-server
+      command_name: fileshuttle-server
+      description: FileShuttle hub and worker server (no desktop app needed)
+      build_command: npm ci && npm run generate-icons && npm run build:server && npm run build:renderer
+      bundle: dist/server/fileshuttle-server.cjs
+      install_map: |
+        dist/renderer /usr/lib/fileshuttle-server/web
+        deploy/fileshuttle-server.service /usr/lib/systemd/system/fileshuttle-server.service
+        deploy/fileshuttle-server.env /etc/fileshuttle-server/server.env 0640
+      conffiles: /etc/fileshuttle-server/server.env
+      scripts_dir: deploy/debian
+    permissions:
+      contents: write

@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { getLinuxTrash } from './freedesktopTrash';
 
 /**
  * Restoring files from the Recycle Bin. Electron can send things *to* the bin
@@ -88,11 +89,15 @@ ConvertTo-Json -InputObject @($results) -Compress
 
 export const restoreFromRecycleBin: RestoreFn = async (requests) => {
   if (requests.length === 0) return [];
+  if (process.platform === 'linux') {
+    // The freedesktop.org trash (home trash and per-drive trashes), the same one the server's trash writes to.
+    return getLinuxTrash().restore(requests);
+  }
   if (process.platform !== 'win32') {
     return requests.map((r) => ({
       path: r.path,
       status: 'unsupported' as const,
-      reason: 'restoring from the Recycle Bin is only supported on Windows',
+      reason: 'restoring from the Recycle Bin is only supported on Windows and Linux',
     }));
   }
 

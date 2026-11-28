@@ -5,7 +5,7 @@ import { FileOutcome, RunResult } from '../../shared/types';
 import { buildRunResult } from '../database/repository';
 import { pathExists, renameOrCopyAcrossDevices } from './mover';
 import { restoreFromRecycleBin, RestoreFn, RestoreRequest, RestoreResult } from './recycleBin';
-import { electronTrash, TrashFn } from './trash';
+import { defaultTrash, TrashFn } from './trash';
 
 export interface UndoOptions {
   trash?: TrashFn;
@@ -46,7 +46,7 @@ function errText(err: unknown): string {
  */
 export async function undoRun(fileOutcomes: FileOutcome[], options: UndoOptions = {}): Promise<RunResult> {
   const startedAt = new Date();
-  const trash = options.trash ?? electronTrash;
+  const trash = options.trash ?? defaultTrash;
   const restore = options.restore ?? restoreFromRecycleBin;
   const outcomes: FileOutcome[] = [];
 

@@ -6,7 +6,7 @@ import { validateFilters } from '../../shared/validation';
 import { buildRunResult } from '../database/repository';
 import { readDownloadOrigin } from './downloadOrigin';
 import { evaluateFilters, FileFacts, partitionKeepNewest } from './filters';
-import { electronTrash, TrashFn } from './trash';
+import { defaultTrash, TrashFn } from './trash';
 import {
   createZip,
   DEFAULT_UNZIP_LIMITS,
@@ -113,7 +113,7 @@ function errorText(err: unknown): string {
 function makeContext(options: RunOptions): RunContext {
   let lastEmit = 0;
   const ctx: RunContext = {
-    trash: options.trash ?? electronTrash,
+    trash: options.trash ?? defaultTrash,
     dryRun: options.dryRun ?? false,
     backupOverwritten: options.backupOverwritten ?? true,
     limits: options.unzipLimits ?? DEFAULT_UNZIP_LIMITS,

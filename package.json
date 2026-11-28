@@ -10,11 +10,12 @@
     "build": "npm run generate-icons && npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.main.json",
+    "build:server": "vite build --config vite.server.config.ts",
     "package": "electron-builder",
     "generate-icons": "node scripts/generate-icons.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
     "smoke": "node scripts/smoke-test.js"
   },
   "keywords": [

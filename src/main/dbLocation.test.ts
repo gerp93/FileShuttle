@@ -1,19 +1,17 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { queryAll } from './database/dbHelpers';
 import { openDatabase } from './database/sqlite';
 import { makeTempDir, removeDir } from './engine/testUtils';
 
 let userData: string;
-vi.mock('electron', () => ({
-  app: { getPath: () => userData, isPackaged: false, setPath: () => undefined },
-}));
-
+import { setUserDataDir } from './appPaths';
 import { setDbPath } from './dbLocation';
 
 beforeEach(() => {
   userData = makeTempDir('fileshuttle-loc-');
+  setUserDataDir(userData);
 });
 afterEach(() => removeDir(userData));
 

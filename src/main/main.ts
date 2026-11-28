@@ -7,7 +7,6 @@ import { Database } from './database/sqlite';
 import { flushDatabase, initDatabase, takeRecoveryNotice } from './database/schema';
 import * as repo from './database/repository';
 import {
-  pinUserDataPath,
   getConfiguredDbPath,
   getEffectiveDbPath,
   getDefaultDbPath,
@@ -15,6 +14,9 @@ import {
   setDbPath,
   resetToDefaultDbPath,
 } from './dbLocation';
+import { pinUserDataPath } from './electronPaths';
+import { electronTrash } from './electronTrash';
+import { setDefaultTrash } from './engine/trash';
 import { logStartupStep, resetStartupLog } from './startupLog';
 import { attachContextMenu, setupApplicationMenu } from './menu';
 import { nearestExistingFolder } from './folderCheck';
@@ -30,6 +32,8 @@ import { getLocalWorkerId } from './database/workers';
 import { RemoteSettingsInput, RunResult, UpdateCheckResult } from '../shared/types';
 
 pinUserDataPath();
+// The desktop sends deleted files to Electron's Recycle Bin / trash (the server uses its own, engine/freedesktopTrash.ts).
+setDefaultTrash(electronTrash);
 app.setName('fileshuttle');
 // Must match build.appId in package.json and the installer/taskbar shortcut.
 // Without this, Windows uses Electron's default (electron.app.FileShuttle) and

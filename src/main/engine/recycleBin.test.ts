@@ -30,9 +30,17 @@ function sendToRecycleBin(filePath: string): void {
 }
 
 describe('restoreFromRecycleBin', () => {
-  it.skipIf(onWindows)('reports "unsupported" off Windows', async () => {
+  it.skipIf(onWindows || process.platform === 'linux')('reports "unsupported" off Windows and Linux', async () => {
     const [result] = await restoreFromRecycleBin([{ path: '/tmp/x', notBeforeMs: 0, notAfterMs: Date.now() }]);
     expect(result.status).toBe('unsupported');
+  });
+
+  // Linux restores from the freedesktop.org trash (engine/freedesktopTrash.test.ts covers the round trip).
+  it.skipIf(process.platform !== 'linux')('on Linux, reports not_found for something that is not in the trash', async () => {
+    const [result] = await restoreFromRecycleBin([
+      { path: '/nonexistent-fileshuttle-test/x', notBeforeMs: 0, notAfterMs: Date.now() },
+    ]);
+    expect(result.status).toBe('not_found');
   });
 
   it('returns nothing for no requests', async () => {

@@ -21,6 +21,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface RemoteServerOptions {
   port: number;
+  /** Address to listen on. Default 127.0.0.1; the headless server accepts other loopback addresses (see src/server/config.ts). */
+  host?: string;
   /** The built renderer (Vite output). */
   staticDir: string;
   handlers: HandlerMap;
@@ -188,7 +190,7 @@ export class RemoteServer {
     this.maxBody = opts.maxBodyBytes ?? 1024 * 1024;
   }
 
-  /** Starts listening on 127.0.0.1; resolves with the port actually bound (useful with port 0). */
+  /** Starts listening on 127.0.0.1 (or `host`); resolves with the port actually bound (useful with port 0). */
   start(): Promise<number> {
     if (this.server) return Promise.reject(new Error('Remote server is already running.'));
     const server = http.createServer((req, res) => {
@@ -202,7 +204,7 @@ export class RemoteServer {
         reject(err);
       };
       server.once('error', onError);
-      server.listen(this.opts.port, BIND_HOST, () => {
+      server.listen(this.opts.port, this.opts.host ?? BIND_HOST, () => {
         server.removeListener('error', onError);
         server.on('error', (err) => this.opts.onError?.(err.message));
         const address = server.address();
