@@ -28,6 +28,8 @@ const LEGACY_CHANNELS = [
 const NEW_CHANNELS = [
   'dialogs:listFolder', 'remote:getSettings', 'remote:setSettings', 'remote:setPassword',
   'mcp:listTokens', 'mcp:createToken', 'mcp:revokeToken',
+  'hubLink:getState', 'hubLink:connect', 'hubLink:disconnect', 'hubLink:setAllowedFolders', 'hubLink:suggestFolders',
+  'hubLink:sendDefinitions', 'hubLink:openHub',
   'workers:list', 'workers:createPairCode', 'workers:remove',
 ];
 

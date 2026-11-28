@@ -31,7 +31,8 @@ import { Hub } from './hub/hub';
 import { InProcessSystem, startInProcessWorker } from './worker/inProcess';
 import { runSettings } from './settings/appSettings';
 import { getLocalWorkerId } from './database/workers';
-import { RemoteSettingsInput, RunResult, UpdateCheckResult } from '../shared/types';
+import { HubLink } from './worker/hubLink';
+import { HubLinkState, RemoteSettingsInput, RunResult, UpdateCheckResult } from '../shared/types';
 
 pinUserDataPath();
 // The desktop sends deleted files to Electron's Recycle Bin / trash (the server uses its own, engine/freedesktopTrash.ts).
@@ -49,6 +50,8 @@ let db: Database | null = null;
 // folder watchers and the mover. Both live in this process for now, linked by an in-process transport.
 let hub: Hub | null = null;
 let workerSystem: InProcessSystem | null = null;
+// When this computer is paired with a hub on another machine it works for that hub instead of running its own jobs.
+let hubLink: HubLink | null = null;
 let retention: RetentionService | null = null;
 let remote: RemoteController | null = null;
 let announcedBackground = false;
@@ -378,7 +381,40 @@ function checkForUpdatesNow(): Promise<UpdateCheckResult> {
   });
 }
 
+/** This app's own worker: the scheduler, watchers and mover for the jobs in its own database. */
+function startLocalWorker(): void {
+  if (workerSystem || !hub || !db) return;
+  const database = db;
+  // The local worker says hello and is sent its schedule; applying the first one starts the scheduler and the
+  // watchers and catches up on anything that fired while the app wasn't running.
+  workerSystem = startInProcessWorker(hub, {
+    workerId: getLocalWorkerId(database),
+    appVersion: app.getVersion(),
+    readRunSettings: () => runSettings.read(database),
+    onBackgroundRunFinished: (kind, jobId, result) => notifyRunFinished(kind, jobId, result),
+    heartbeat: true,
+  });
+}
+
+/** The folders this computer's own mappings read from and write to (each covers what is inside it), for the "allow these" button. */
+function suggestAllowedFolders(database: Database): string[] {
+  const folders = new Set<string>();
+  for (const mapping of repo.listMappings(database)) {
+    if (mapping.sourcePath.trim()) folders.add(mapping.sourcePath.trim());
+    if (mapping.actionType !== 'delete' && mapping.destPath.trim()) folders.add(mapping.destPath.trim());
+  }
+  return [...folders].sort((a, b) => a.localeCompare(b));
+}
+
 function registerIPCHandlers(): void {
+  const database = db!;
+  hubLink = new HubLink({
+    dataDir: path.join(getUserDataDir(), 'hub-link'),
+    appVersion: app.getVersion(),
+    readRunSettings: () => runSettings.read(database),
+    onBackgroundRunFinished: (kind, jobId, result) => notifyRunFinished(kind, jobId, result),
+    log: logStartupStep,
+  });
   // Everything that works the same from the window and from the phone lives in one table
   // (api/handlers.ts); the HTTP server calls the very same functions.
   const handlers = createHandlers({
@@ -486,6 +522,40 @@ function registerIPCHandlers(): void {
 
   ipcMain.handle('updates:check', () => checkForUpdatesNow());
 
+  // Connect to a hub (desktop only: a phone session must never be able to pair this computer or send its jobs anywhere).
+  ipcMain.handle('hubLink:getState', (): HubLinkState => hubLink!.state());
+  ipcMain.handle('hubLink:connect', async (_, input: { hubUrl: string; code: string; name?: string }) => {
+    const state = await hubLink!.connect({
+      hubUrl: String(input?.hubUrl ?? ''),
+      code: String(input?.code ?? ''),
+      name: input?.name ? String(input.name) : undefined,
+    });
+    // From here this computer works for the hub: its own jobs stop (nothing is deleted).
+    workerSystem?.stop();
+    workerSystem = null;
+    return state;
+  });
+  ipcMain.handle('hubLink:disconnect', async () => {
+    await hubLink!.disconnect();
+    startLocalWorker();
+    return hubLink!.state();
+  });
+  ipcMain.handle('hubLink:setAllowedFolders', (_, folders: string[]) =>
+    hubLink!.setAllowedFolders(Array.isArray(folders) ? folders.map(String) : [])
+  );
+  ipcMain.handle('hubLink:suggestFolders', () => suggestAllowedFolders(db!));
+  ipcMain.handle('hubLink:sendDefinitions', async (_, switchOff: boolean) => {
+    // Read-only on this app's own data: the mappings and jobs stay exactly where they are.
+    return hubLink!.sendDefinitions(
+      { mappings: repo.listMappings(db!), jobs: repo.listJobs(db!) },
+      { switchOff: switchOff === true }
+    );
+  });
+  ipcMain.handle('hubLink:openHub', () => {
+    const url = hubLink!.state().hubUrl;
+    if (url) void shell.openExternal(url);
+  });
+
   ipcMain.handle('remote:getSettings', () => remote!.state());
   ipcMain.handle('remote:setSettings', (_, input: RemoteSettingsInput) => remote!.setSettings(input ?? {}));
   ipcMain.handle('remote:setPassword', (_, password: string) => remote!.setPassword(String(password ?? '')));
@@ -564,20 +634,16 @@ app.whenReady().then(async () => {
     announceDatabaseRecovery();
     // The local worker says hello and is sent its schedule; applying the first one starts the
     // scheduler and the watchers and catches up on anything that fired while the app wasn't running.
-    const database = db;
-    workerSystem = startInProcessWorker(hub, {
-      workerId: getLocalWorkerId(database),
-      appVersion: app.getVersion(),
-      readRunSettings: () => runSettings.read(database),
-      onBackgroundRunFinished: (kind, jobId, result) => notifyRunFinished(kind, jobId, result),
-      heartbeat: true,
-    });
+    // Paired with a hub: work for it. Otherwise (or if its token is missing) this computer runs its own jobs.
+    const working = hubLink!.isPaired() && (await hubLink!.start());
+    if (!working) startLocalWorker();
     setupAutoUpdater();
 
     // Timers are unreliable across sleep, and files may have landed while the PC
     // was asleep: rebuild the schedules and pick up anything that was missed.
     powerMonitor.on('resume', () => {
       workerSystem?.worker.resumeFromSleep();
+      hubLink?.resumeFromSleep();
     });
 
     app.on('activate', () => {
@@ -601,6 +667,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   isQuitting = true;
   workerSystem?.stop();
+  hubLink?.stop();
   retention?.shutdown();
   void remote?.shutdown();
   if (db) flushDatabase(db);

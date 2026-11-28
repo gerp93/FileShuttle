@@ -27,10 +27,15 @@ export interface WorkerEndpoints {
   pair: (input: unknown) => { status: number; body: unknown };
   /** A worker's connection, after the upgrade. The gateway does the rest (hello, token, protocol). */
   accept: (connection: WebSocketConnection) => void;
+  /** A paired worker sends its existing mappings and jobs (the gateway checks the token). Absent: the route is 404. */
+  importDefinitions?: (workerId: string, token: string, body: unknown) => { status: number; body: unknown };
 }
 
 export const WORKER_SOCKET_PATH = '/api/workers/ws';
 export const WORKER_PAIR_PATH = '/api/workers/pair';
+export const WORKER_IMPORT_PATH = '/api/workers/import';
+/** An import is a whole set of definitions: far bigger than a phone's request, far smaller than a run report. */
+const MAX_IMPORT_BYTES = 16 * 1024 * 1024;
 const MAX_WORKER_SOCKETS = 64;
 
 export interface RemoteServerOptions {
@@ -380,6 +385,27 @@ export class RemoteServer {
     return this.json(res, answer.status, answer.body, { 'Cache-Control': 'no-store' });
   }
 
+  /** POST /api/workers/import: a paired worker (bearer token + its id) sends its mappings and jobs to be created on its own account. */
+  private async importWorker(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const workers = this.opts.workers;
+    if (!workers?.importDefinitions) return this.json(res, 404, { ok: false, error: 'Not found.' });
+    if (headerValue(req.headers.origin) !== null) {
+      return this.json(res, 403, { ok: false, error: 'Browsers cannot use this endpoint.' });
+    }
+    const auth = /^Bearer\s+(\S+)\s*$/i.exec(headerValue(req.headers.authorization) ?? '');
+    const workerId = headerValue(req.headers['x-worker-id']);
+    const key = this.clientKey(req);
+    const wait = this.pairLimiter.blockedFor(key);
+    if (wait > 0) {
+      return this.json(res, 429, { ok: false, error: 'Too many failed attempts. Try again later.' }, { 'Retry-After': String(wait) });
+    }
+    if (!auth || !workerId) return this.json(res, 401, { ok: false, error: 'This machine is not accepted by the hub.' });
+    const body = await this.readJson(req, MAX_IMPORT_BYTES);
+    const answer = workers.importDefinitions(workerId, auth[1], body);
+    if (answer.status === 401) this.pairLimiter.recordFailure(key);
+    return this.json(res, answer.status, answer.body, { 'Cache-Control': 'no-store' });
+  }
+
   private securityHeaders(res: http.ServerResponse): void {
     res.setHeader('Content-Security-Policy', CSP);
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -467,6 +493,7 @@ export class RemoteServer {
     }
     // Before the browser checks: a worker program has no Origin, no cookie and no CSRF header.
     if (pathname === WORKER_PAIR_PATH) return this.pairWorker(req, res);
+    if (pathname === WORKER_IMPORT_PATH) return this.importWorker(req, res);
     if (!this.csrfOk(req)) return this.json(res, 403, { ok: false, error: 'Cross-site request refused.' });
 
     if (pathname === '/api/login') return this.login(req, res);

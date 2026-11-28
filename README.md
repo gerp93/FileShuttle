@@ -241,6 +241,27 @@ Settings (environment, then `worker.json` in the data folder; default
 - With a Tailscale allowed-logins list on the hub, the worker machine's login must be
   on it.
 
+#### The desktop app as a worker
+
+The desktop app can be the worker too, so a hub on a house server runs the jobs for your PC.
+**Settings → Connect to a hub** (desktop only; a phone session cannot reach it):
+
+1. Make a code on the hub, then enter the hub's `https://` address and the code. The token is stored with
+   Windows DPAPI (a `0600` file elsewhere) in the app's data folder, `hub-link`.
+2. **Allow folders** (one per line; the same rule as above: the hub cannot change the list, and an empty list refuses
+   everything). *Add the Folders My Mappings Use* fills it from this app's own mappings for you to review.
+3. **Bring this computer's jobs to the hub** (optional): *Send My Mappings and Jobs to the Hub* copies them to the hub
+   on this computer's account (they never run on the hub itself), with their schedules, filters, step order and
+   the time each job last ran (so connecting does not make a job look overdue and "catch up" run it at once). Tick
+   *leave the jobs switched off* to look them over on the hub first. It is all or nothing, nothing in this app is changed,
+   and the hub refuses it if this computer already has mappings or jobs there. Run history stays in this app.
+4. While connected, **this app's own jobs are paused** (its scheduler and folder watchers are not started; nothing is
+   deleted) and a bar on every page says so, with *Open the Hub*. *Disconnect* forgets the token and the pairing, and
+   the app runs its own jobs again; the machine stays on the hub until you remove it under Machines (and if you sent
+   the jobs, they now exist in both places: switch off or delete one set).
+
+Closing the window keeps the worker running in the tray, like the app's own schedules.
+
 Build it with `npm run build:server` (one file, `dist/server/fileshuttle-server.cjs`,
 no `electron` in its imports; a test enforces that).
 

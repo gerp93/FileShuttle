@@ -13,6 +13,7 @@ import { isWebMode } from '../utils/platform';
 import RemoteAccessSection from '../components/RemoteAccessSection';
 import McpAccessSection from '../components/McpAccessSection';
 import MachinesSection from '../components/MachinesSection';
+import HubLinkSection from '../components/HubLinkSection';
 
 export default function Settings() {
   // On the phone the PC-only parts (start-up, database file, updates, remote access itself) are hidden.
@@ -270,6 +271,10 @@ export default function Settings() {
           <hr className="divider" />
 
           <McpAccessSection />
+
+          <hr className="divider" />
+
+          <HubLinkSection />
         </>
       )}
 

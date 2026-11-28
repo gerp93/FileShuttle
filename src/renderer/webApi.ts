@@ -190,6 +190,15 @@ export function createWebApi(): FileShuttleAPI {
       createToken: () => unavailable(),
       revokeToken: () => unavailable(),
     },
+    hubLink: {
+      getState: () => unavailable(),
+      connect: () => unavailable(),
+      disconnect: () => unavailable(),
+      setAllowedFolders: () => unavailable(),
+      suggestFolders: () => unavailable(),
+      sendDefinitions: () => unavailable(),
+      openHub: () => unavailable(),
+    },
     updates: {
       check: () => unavailable(),
     },

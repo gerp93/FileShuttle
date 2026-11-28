@@ -30,16 +30,20 @@ const POWERSHELL_SCRIPT = [
   '$mode = [Console]::In.ReadLine()',
   '$data = [Convert]::FromBase64String([Console]::In.ReadLine())',
   '$scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser',
-  'if ($mode -eq "protect") { $out = [System.Security.Cryptography.ProtectedData]::Protect($data, $null, $scope) }',
-  'else { $out = [System.Security.Cryptography.ProtectedData]::Unprotect($data, $null, $scope) }',
+  // One element: joined with "; " an `else` on its own would be a syntax error (found by running this on Windows).
+  'if ($mode -eq "protect") { $out = [System.Security.Cryptography.ProtectedData]::Protect($data, $null, $scope) } else { $out = [System.Security.Cryptography.ProtectedData]::Unprotect($data, $null, $scope) }',
   '[Console]::Out.Write([Convert]::ToBase64String($out))',
 ].join('; ');
+
+const ENCODED_SCRIPT = Buffer.from(POWERSHELL_SCRIPT, 'utf16le').toString('base64');
 
 export const runPowerShellDpapi: DpapiRunner = (mode, inputBase64) =>
   new Promise((resolve, reject) => {
     const child = execFile(
       'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', POWERSHELL_SCRIPT],
+      // -EncodedCommand: a script with double quotes in it loses them in a -Command argument on Windows
+      // (found by running this for real: "protect" reached PowerShell as the bare word protect).
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', ENCODED_SCRIPT],
       { timeout: 30_000, windowsHide: true },
       (err, stdout) => {
         if (err) reject(new Error('Windows could not protect or read the saved token (DPAPI).'));
