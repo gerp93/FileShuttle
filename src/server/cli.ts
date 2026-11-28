@@ -6,6 +6,10 @@ import { flushDatabase, initDatabase } from '../main/database/schema';
 import { setStartupLogQuiet } from '../main/startupLog';
 import { setRemotePassword } from '../main/remote/remoteSettings';
 import { createMcpToken, listMcpTokens, revokeMcpToken } from '../main/mcp/tokens';
+import { createPairingCode } from '../main/hub/pairing';
+import { loadWorkerConfig, WorkerConfigError } from '../main/worker/workerConfig';
+import { HubUrlError } from '../main/worker/hubClient';
+import { pairWorker, startWorker } from './workerMode';
 
 export const USAGE = `FileShuttle server ${APP_VERSION}
 
@@ -13,7 +17,10 @@ Usage: fileshuttle-server <command>
 
   all            hub and a local worker in one process (what the systemd unit runs)
   hub            the hub only (database, schedules, web UI and API); runs nothing itself
-  worker         a worker for a remote hub (not available yet)
+  worker         run this machine as a worker for a hub it was paired with
+  worker pair --hub <address> --code <code> [--name <name>]
+                 pair this machine with a hub (the code is made in the hub's Settings > Machines, or with pair-code)
+  pair-code      make a one-time code (valid 10 minutes) for pairing a worker; run it on the hub
   set-password   set the password for the web UI (typed twice, or one line on stdin)
   mcp-token create <name>   make an access token for the MCP server (shown once)
   mcp-token list            list the tokens (names and dates, never the tokens)
@@ -22,6 +29,8 @@ Usage: fileshuttle-server <command>
 
 Settings come from the environment (see /etc/fileshuttle-server/server.env):
   FILESHUTTLE_SERVER_DATA_DIR  FILESHUTTLE_SERVER_PORT  FILESHUTTLE_SERVER_HOST  FILESHUTTLE_SERVER_WEB_DIR
+A worker reads FILESHUTTLE_WORKER_DATA_DIR, FILESHUTTLE_WORKER_HUB, FILESHUTTLE_WORKER_NAME and
+FILESHUTTLE_WORKER_ALLOWED_FOLDERS (folders separated by ":" , or ";" on Windows), or the same in worker.json.
 The server listens on a loopback address only; publish it with "tailscale serve" (never Funnel).
 `;
 
@@ -171,6 +180,56 @@ async function mcpTokenCommand(args: string[]): Promise<number> {
   }
 }
 
+/** `pair-code`: makes a one-time code in the hub's own database (the running hub accepts it right away). */
+async function pairCodeCommand(): Promise<number> {
+  const config = parseServerConfig();
+  const dbPath = prepareDataDir(config);
+  setStartupLogQuiet(true);
+  const db = await initDatabase(dbPath);
+  try {
+    const made = createPairingCode(db);
+    flushDatabase(db);
+    console.log(made.code);
+    console.error(`This code works once and expires at ${made.expiresAt} (10 minutes). On the worker machine run:\n  fileshuttle-server worker pair --hub <the hub's https address> --code ${made.code}`);
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+/** Reads `--name value` / `--name=value` options. */
+function readOptions(args: string[], names: string[]): { values: Record<string, string>; rest: string[] } | null {
+  const values: Record<string, string> = {};
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const match = /^--([a-z]+)(?:=(.*))?$/.exec(arg);
+    if (!match) {
+      rest.push(arg);
+      continue;
+    }
+    if (!names.includes(match[1])) return null;
+    const value = match[2] ?? args[++i];
+    if (value === undefined) return null;
+    values[match[1]] = value;
+  }
+  return { values, rest };
+}
+
+/** `worker pair --hub <address> --code <code> [--name <name>]`. */
+async function workerPairCommand(args: string[]): Promise<number> {
+  const parsed = readOptions(args, ['hub', 'code', 'name']);
+  if (!parsed || parsed.rest.length > 0 || !parsed.values.hub || !parsed.values.code) {
+    console.error('Usage: fileshuttle-server worker pair --hub <address> --code <code> [--name <name>]');
+    return 2;
+  }
+  const config = loadWorkerConfig();
+  const result = await pairWorker(config, { hubUrl: parsed.values.hub, code: parsed.values.code, name: parsed.values.name });
+  console.log(`Paired as "${result.name}". Allowed folders are set on this machine (FILESHUTTLE_WORKER_ALLOWED_FOLDERS or ${config.dataDir}/worker.json); until you add one it refuses every folder.`);
+  console.log('Start it with: fileshuttle-server worker');
+  return 0;
+}
+
 function waitForSignal(stop: () => Promise<void>): Promise<void> {
   return new Promise((resolve) => {
     let stopping = false;
@@ -211,9 +270,20 @@ export async function runCli(args: string[]): Promise<number> {
         await waitForSignal(() => running.stop());
         return 0;
       }
-      case 'worker':
-        console.error('The remote worker is not available yet (phase 5). Use "all" for a hub with a local worker.');
-        return 2;
+      case 'worker': {
+        if (args[1] === 'pair') return await workerPairCommand(args.slice(2));
+        if (args.length > 1) {
+          console.error(USAGE);
+          return 2;
+        }
+        const config = loadWorkerConfig();
+        const running = await startWorker(config);
+        console.log(`FileShuttle worker ${APP_VERSION} "${config.name}" connecting to ${config.hubUrl} (data: ${config.dataDir}).`);
+        await waitForSignal(async () => running.stop());
+        return 0;
+      }
+      case 'pair-code':
+        return await pairCodeCommand();
       case 'set-password':
         return await setPasswordCommand();
       case 'mcp-token':
@@ -223,6 +293,10 @@ export async function runCli(args: string[]): Promise<number> {
         return 2;
     }
   } catch (err) {
+    if (err instanceof WorkerConfigError || err instanceof HubUrlError) {
+      console.error(err.message);
+      return 2;
+    }
     if (err instanceof ConfigError) {
       console.error(`Configuration problem: ${err.message}`);
       return 2;

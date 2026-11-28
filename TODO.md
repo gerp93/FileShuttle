@@ -10,18 +10,17 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
   is done: Settings → Remote access, an HTTP server on 127.0.0.1 behind
   `tailscale serve`, the same UI in the phone's browser). The hub/worker split is
   prepared and runs in one process (workers table, `worker_id`/`run_uid`,
-  `src/shared/workerProtocol.ts`, in-process transport). Still to do: a network
-  transport, worker tokens and pairing, a second worker, and showing offline
-  workers (heartbeat constants exist, no timer yet) so the phone can manage jobs
-  on several computers; a web-push or notification path
+  `src/shared/workerProtocol.ts`, in-process transport). The network
+  transport, pairing and a second worker (the Machines section) are done in
+  phase 5a. Still to do: a desktop setting to use a remote hub (phase 5b); a web-push or notification path
   for finished runs; a PWA manifest/icon so it can be added to the home screen;
   a check on a real phone and a real tailnet (the layout was written for ~390 px
   but only built and unit-tested here).
 
 - Headless server, next steps (phase 4a is done: `fileshuttle-server` .deb,
-  `hub`/`all`, loopback + `tailscale serve`). Still to do: the `worker` command
-  and its network transport, worker tokens and pairing, an outbox for a worker
-  that is offline, a Windows build of the server. Phase 4b (MCP, assistant retired) is
+  `hub`/`all`, loopback + `tailscale serve`; phase 5a added `worker`, pairing, tokens and
+  an outbox). Still to do (phase 5b): a Windows build of the worker and starting it at logon.
+  Not tried on a real second machine: the Windows DPAPI path, a real tailnet. Phase 4b (MCP, assistant retired) is
   done but not tried against a real MCP client. Not checked yet: the .deb built and installed by the real
   workflow, Node SEA's `process.argv` handling, and a real tailnet.
 

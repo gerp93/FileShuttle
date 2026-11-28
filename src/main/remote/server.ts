@@ -1,8 +1,10 @@
 import * as http from 'http';
+import type * as net from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
 import type { Handler, HandlerMap } from '../api/handlers';
+import { checkUpgradeRequest, completeUpgrade, refuseUpgrade, WebSocketConnection } from '../net/webSocket';
 
 /**
  * The phone-facing HTTP server. It only ever listens on 127.0.0.1 and is meant to be published
@@ -19,6 +21,18 @@ export const CSRF_HEADER = 'x-fileshuttle';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** The worker side of the server: pairing, and the WebSocket workers connect over. Absent on a desktop app without workers. */
+export interface WorkerEndpoints {
+  /** Trades a pairing code for a worker id and token. */
+  pair: (input: unknown) => { status: number; body: unknown };
+  /** A worker's connection, after the upgrade. The gateway does the rest (hello, token, protocol). */
+  accept: (connection: WebSocketConnection) => void;
+}
+
+export const WORKER_SOCKET_PATH = '/api/workers/ws';
+export const WORKER_PAIR_PATH = '/api/workers/pair';
+const MAX_WORKER_SOCKETS = 64;
+
 export interface RemoteServerOptions {
   port: number;
   /** Address to listen on. Default 127.0.0.1; the headless server accepts other loopback addresses (see src/server/config.ts). */
@@ -34,6 +48,8 @@ export interface RemoteServerOptions {
   getAllowedLogins: () => string[];
   /** The MCP endpoint (POST /mcp). It does its own auth (bearer token); null/absent leaves /mcp unserved. */
   mcp?: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+  /** Worker pairing and the worker WebSocket (`/api/workers/pair`, `/api/workers/ws`); unserved when absent. */
+  workers?: WorkerEndpoints;
   onError?: (message: string) => void;
   sessionIdleMs?: number;
   maxLoginFailures?: number;
@@ -177,6 +193,8 @@ export class RemoteServer {
   private server: http.Server | null = null;
   private readonly sessions: SessionStore;
   private readonly limiter: LoginLimiter;
+  private readonly pairLimiter: LoginLimiter;
+  private readonly workerSockets = new Set<WebSocketConnection>();
   private readonly clients = new Set<EventClient>();
   private heartbeat: NodeJS.Timeout | null = null;
   private readonly channels: ReadonlySet<string>;
@@ -188,6 +206,7 @@ export class RemoteServer {
     this.now = opts.now ?? Date.now;
     this.sessions = new SessionStore(opts.sessionIdleMs ?? 30 * DAY_MS, this.now);
     this.limiter = new LoginLimiter(opts.maxLoginFailures ?? 5, opts.loginFailureWindowMs ?? 15 * 60 * 1000, this.now);
+    this.pairLimiter = new LoginLimiter(opts.maxLoginFailures ?? 5, opts.loginFailureWindowMs ?? 15 * 60 * 1000, this.now);
     this.channels = new Set(opts.allowedChannels);
     this.maxBody = opts.maxBodyBytes ?? 1024 * 1024;
   }
@@ -199,6 +218,7 @@ export class RemoteServer {
       void this.handle(req, res);
     });
     server.requestTimeout = 30_000;
+    server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket as net.Socket, head));
     this.server = server;
     return new Promise<number>((resolve, reject) => {
       const onError = (err: Error) => {
@@ -231,6 +251,11 @@ export class RemoteServer {
     for (const client of this.clients) client.res.end();
     this.clients.clear();
     this.sessions.clear();
+    // Upgraded sockets are no longer the HTTP server's, so closeAllConnections() would leave them open.
+    for (const socket of [...this.workerSockets]) {
+      socket.close(1001, 'The hub is shutting down.');
+      setTimeout(() => socket.terminate(), 1000).unref();
+    }
     if (!server) return;
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
@@ -268,13 +293,7 @@ export class RemoteServer {
       this.securityHeaders(res);
 
       // Tailscale allow list: refused before anything else, static files included.
-      const allowed = this.opts.getAllowedLogins();
-      if (allowed.length > 0) {
-        const login = headerValue(req.headers['tailscale-user-login'])?.toLowerCase();
-        if (!login || !allowed.some((a) => a.toLowerCase() === login)) {
-          return this.json(res, 403, { ok: false, error: 'Not allowed.' });
-        }
-      }
+      if (!this.loginAllowed(req)) return this.json(res, 403, { ok: false, error: 'Not allowed.' });
 
       let pathname: string;
       try {
@@ -306,6 +325,59 @@ export class RemoteServer {
       if (!res.headersSent) this.json(res, 500, { ok: false, error: 'Server error.' });
       else res.end();
     }
+  }
+
+  /** True when the Tailscale allow list (if any) lets this request in. The same rule for pages, the API and the worker socket. */
+  private loginAllowed(req: http.IncomingMessage): boolean {
+    const allowed = this.opts.getAllowedLogins();
+    if (allowed.length === 0) return true;
+    const login = headerValue(req.headers['tailscale-user-login'])?.toLowerCase();
+    return !!login && allowed.some((a) => a.toLowerCase() === login);
+  }
+
+  private handleUpgrade(req: http.IncomingMessage, socket: net.Socket, head: Buffer): void {
+    socket.on('error', () => socket.destroy());
+    try {
+      if (!this.loginAllowed(req)) return refuseUpgrade(socket, 403, 'Not allowed.');
+      let pathname: string;
+      try {
+        pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+      } catch {
+        return refuseUpgrade(socket, 400, 'Bad request.');
+      }
+      const workers = this.opts.workers;
+      if (pathname !== WORKER_SOCKET_PATH || !workers) return refuseUpgrade(socket, 404, 'Not found.');
+      const check = checkUpgradeRequest(req);
+      if (!check.ok) return refuseUpgrade(socket, check.status, check.message);
+      if (this.workerSockets.size >= MAX_WORKER_SOCKETS) return refuseUpgrade(socket, 503, 'Too many connections.');
+      const connection = completeUpgrade(socket, head, check.key);
+      this.workerSockets.add(connection);
+      connection.onClose(() => this.workerSockets.delete(connection));
+      workers.accept(connection);
+    } catch (err) {
+      this.opts.onError?.(err instanceof Error ? err.message : 'Unexpected error');
+      socket.destroy();
+    }
+  }
+
+  /** POST /api/workers/pair: a worker machine trades its one-time code for a token. No browser session, no CSRF header: it is not a browser. */
+  private async pairWorker(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const workers = this.opts.workers;
+    if (!workers) return this.json(res, 404, { ok: false, error: 'Not found.' });
+    // A browser always sends Origin; a worker program never does. Refusing it keeps a web page from pairing.
+    if (headerValue(req.headers.origin) !== null) {
+      return this.json(res, 403, { ok: false, error: 'Browsers cannot use this endpoint.' });
+    }
+    const key = this.clientKey(req);
+    const wait = this.pairLimiter.blockedFor(key);
+    if (wait > 0) {
+      return this.json(res, 429, { ok: false, error: 'Too many failed attempts. Try again later.' }, { 'Retry-After': String(wait) });
+    }
+    const body = await this.readJson(req, 4096);
+    const answer = workers.pair(body);
+    if (answer.status === 401) this.pairLimiter.recordFailure(key);
+    else if (answer.status === 200) this.pairLimiter.reset(key);
+    return this.json(res, answer.status, answer.body, { 'Cache-Control': 'no-store' });
   }
 
   private securityHeaders(res: http.ServerResponse): void {
@@ -393,6 +465,8 @@ export class RemoteServer {
     if (method !== 'POST') {
       return this.json(res, 405, { ok: false, error: 'Method not allowed.' }, { Allow: 'POST' });
     }
+    // Before the browser checks: a worker program has no Origin, no cookie and no CSRF header.
+    if (pathname === WORKER_PAIR_PATH) return this.pairWorker(req, res);
     if (!this.csrfOk(req)) return this.json(res, 403, { ok: false, error: 'Cross-site request refused.' });
 
     if (pathname === '/api/login') return this.login(req, res);

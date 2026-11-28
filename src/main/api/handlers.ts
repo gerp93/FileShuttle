@@ -1,6 +1,9 @@
 import type { Database } from '../database/sqlite';
 import * as repo from '../database/repository';
 import type { Hub } from '../hub/hub';
+import { createPairingCode } from '../hub/pairing';
+import { getWorker, listQueuedRuns, listWorkers, revokeWorker, workerLoad } from '../database/workers';
+import { versionNotice } from '../../shared/versionNotice';
 import { inputToConfig } from '../services/previewService';
 import { hubSettings, runSettings } from '../settings/appSettings';
 import { validateJobInput } from '../../shared/schedule';
@@ -15,8 +18,10 @@ import {
   RunAllSummary,
   UnzipLimitsSetting,
   UpdateJobInput,
+  PairCodeInfo,
   UpdateMappingInput,
   validateUnzipLimits,
+  WorkerInfo,
 } from '../../shared/types';
 
 /** A channel handler: plain arguments in, a result (or a thrown Error) out. No Electron types. */
@@ -93,7 +98,7 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
     // Previews the editor's current, possibly unsaved, form values.
     'mappings:previewInput': async (input: CreateMappingInput) => {
       assertValidMapping(input);
-      return deps.hub.previewMapping(inputToConfig(input));
+      return deps.hub.previewMapping(inputToConfig(input), input.workerId);
     },
 
     'mappings:listJobsUsing': (id: number) => repo.listJobsUsingMapping(db(), id),
@@ -179,10 +184,54 @@ export function createHandlers(deps: HandlerDeps): HandlerMap {
       return applyRetention(db(), 'expired');
     },
 
-    'dialogs:checkFolder': (folder: string, role: FolderRole) => deps.hub.checkFolder(folder, role),
+    // The machine is optional: with none, this computer's own worker answers.
+    'dialogs:checkFolder': (folder: string, role: FolderRole, workerId?: string) =>
+      deps.hub.checkFolder(folder, role, workerId || undefined),
 
     // The phone has no native folder picker; the page browses with this instead.
-    'dialogs:listFolder': (folder?: string | null) => deps.hub.listFolder(folder),
+    'dialogs:listFolder': (folder?: string | null, workerId?: string) => deps.hub.listFolder(folder, workerId || undefined),
+
+    // Machines (workers) -----------------------------------------------------
+
+    'workers:list': (): WorkerInfo[] => {
+      const queued = listQueuedRuns(db());
+      return listWorkers(db()).map((worker) => {
+        const load = workerLoad(db(), worker.id);
+        return {
+          id: worker.id,
+          name: worker.name,
+          kind: worker.kind,
+          platform: worker.platform,
+          appVersion: worker.appVersion,
+          online: deps.hub.isOnline(worker.id),
+          lastSeenAt: worker.lastSeenAt,
+          versionNotice: worker.kind === 'remote' ? versionNotice(worker.appVersion, deps.getVersion()) : null,
+          mappingCount: load.mappings,
+          jobCount: load.jobs,
+          queuedRunCount: queued.filter((q) => q.workerId === worker.id).length,
+        };
+      });
+    },
+
+    // A one-time code to pair a machine. Only its hash is kept.
+    'workers:createPairCode': (): PairCodeInfo => createPairingCode(db()),
+
+    // Removing a machine cuts it off for good (its token is deleted and its connection closed). The row
+    // stays because run history points at it. A machine that still owns mappings or jobs is not removed
+    // (the safer choice: nothing is deleted behind the person's back); delete those first.
+    'workers:remove': (workerId: string) => {
+      const worker = getWorker(db(), workerId);
+      if (!worker || worker.removedAt) throw new Error('That machine is not in the list.');
+      if (worker.kind !== 'remote') throw new Error('This computer’s own worker cannot be removed.');
+      const load = workerLoad(db(), workerId);
+      if (load.mappings > 0 || load.jobs > 0) {
+        throw new Error(
+          `"${worker.name}" still has ${load.mappings} mapping${load.mappings === 1 ? '' : 's'} and ${load.jobs} job${load.jobs === 1 ? '' : 's'}. Delete them first, then remove the machine.`
+        );
+      }
+      revokeWorker(db(), workerId, new Date().toISOString());
+      deps.hub.disconnectWorker(workerId, 'This machine was removed from the hub.');
+    },
 
     'app:getVersion': () => deps.getVersion(),
   };

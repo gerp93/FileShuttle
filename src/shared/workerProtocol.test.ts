@@ -97,6 +97,7 @@ const examples: Record<ProtocolMessage['type'], ProtocolMessage> = {
   log: { type: 'log', workerId: 'w1', level: 'warn', message: 'hello' },
   heartbeat: { type: 'heartbeat', workerId: 'w1', sentAt: result.startedAt },
   schedule: { type: 'schedule', version: 4, schedule: { mappings: [mapping], jobs: [job] } },
+  ack: { type: 'ack', id: 'u1' },
   runNow: { type: 'runNow', requestId: 'r1', jobId: 2, trigger: 'manual' },
   cancel: { type: 'cancel', requestId: 'r2', jobId: 2 },
   preview: {
@@ -123,7 +124,7 @@ const examples: Record<ProtocolMessage['type'], ProtocolMessage> = {
 
 describe('worker protocol', () => {
   it('has a version and heartbeat constants', () => {
-    expect(PROTOCOL_VERSION).toBe(1);
+    expect(PROTOCOL_VERSION).toBe(2);
     expect(HEARTBEAT_INTERVAL_MS).toBe(30_000);
     expect(WORKER_OFFLINE_AFTER_MS).toBe(90_000);
   });

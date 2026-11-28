@@ -718,6 +718,34 @@ function initSchema(db: Database): void {
   });
   // Must stay last: it rebuilds mappings, jobs and run_history, copying the columns every step above added.
   step('workers: worker_id, run_uid, indexes', () => migrateToWorkers(db));
+  step('remote workers: columns, pairing codes, queued runs', () => migrateToRemoteWorkers(db));
+}
+
+/**
+ * Phase 5a: what a remote worker needs. Plain additions (no table rebuild): the workers table gets
+ * the machine's platform and when it was paired or removed; one-time pairing codes (only a hash of
+ * each); and the "Run now" requests waiting for a machine that is offline.
+ */
+function migrateToRemoteWorkers(db: Database): void {
+  addColumnIfMissing(db, 'workers', 'platform', 'platform TEXT');
+  addColumnIfMissing(db, 'workers', 'paired_at', 'paired_at TEXT');
+  addColumnIfMissing(db, 'workers', 'removed_at', 'removed_at TEXT');
+  db.exec(`CREATE TABLE IF NOT EXISTS worker_pairing_codes (
+    code_hash   TEXT PRIMARY KEY,
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS worker_pairing_failures (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    failures  INTEGER NOT NULL DEFAULT 0
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS pending_runs (
+    job_id      INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+    worker_id   TEXT NOT NULL REFERENCES workers(id),
+    trigger     TEXT NOT NULL,
+    queued_at   TEXT NOT NULL
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pending_runs_worker ON pending_runs(worker_id)');
 }
 
 export async function initDatabase(dbPath?: string): Promise<Database> {

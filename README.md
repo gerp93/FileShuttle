@@ -160,7 +160,9 @@ fileshuttle-server --version
 fileshuttle-server set-password   # asks twice (hidden); or pipe the password on stdin
 fileshuttle-server all            # hub + a worker in this process (what the service runs)
 fileshuttle-server hub            # hub only
-fileshuttle-server worker         # not available yet (phase 5): exits with status 2
+fileshuttle-server pair-code      # make a one-time code for pairing a machine (hub's data folder)
+fileshuttle-server worker pair --hub https://<hub address> --code ABCD-2345 [--name "Office PC"]
+fileshuttle-server worker         # run as a paired worker (see "Workers on other machines")
 ```
 
 - **Loopback only.** It listens on `127.0.0.1:8765` and refuses to start on any
@@ -193,6 +195,51 @@ fileshuttle-server worker         # not available yet (phase 5): exits with stat
   the file fails, never deleted outright.
 - Removing the package keeps the data; purging deletes the database and settings
   (and the user), but not files still in the trash.
+
+### Workers on other machines
+
+A second computer can run jobs for the hub: the hub keeps the database, history
+and web UI, the worker moves files on its own disks.
+
+1. **Make a code.** On the hub: Settings → Machines → *Pair a Machine* (also on the
+   phone page), or `fileshuttle-server pair-code`. It shows `XXXX-XXXX`, valid 10
+   minutes, usable once; five wrong tries void every open code. Only a hash is kept.
+2. **Pair.** On the other machine:
+   `fileshuttle-server worker pair --hub https://<hub address> --code XXXX-XXXX --name "Office PC"`.
+   The hub address must be `https://` (a tailnet name behind `tailscale serve`);
+   plain `http://` is accepted only for `127.0.0.1`, `localhost` and `::1`, and
+   anything else is refused before the code is sent. The worker gets a long random
+   token: Linux/macOS keep it in a `0600` file in a `0700` folder, Windows
+   encrypts it with DPAPI. The hub keeps only its SHA-256 hash. The token is
+   never in a URL or a log line.
+3. **Allow folders.** The worker refuses every path outside its list, whatever the
+   hub says (job folders, folder browsing and checks, undo, restoring from the
+   trash). An empty list refuses everything. Set it on the worker only:
+   `FILESHUTTLE_WORKER_ALLOWED_FOLDERS="/srv/inbox:/mnt/data"` (`;` on Windows), or
+   `"allowedFolders": [...]` in `worker.json`. Symlinks are resolved first and
+   Windows compares case-insensitively.
+4. **Run it:** `fileshuttle-server worker`. It connects to `wss://<hub>/api/workers/ws`,
+   keeps a local copy of its schedule (so it keeps running while the hub is away),
+   reconnects with a back-off up to 60 s, and sends a heartbeat every 30 s.
+
+Settings (environment, then `worker.json` in the data folder; default
+`~/.local/share/fileshuttle-worker`, `%LOCALAPPDATA%\FileShuttleWorker` on Windows):
+`FILESHUTTLE_WORKER_DATA_DIR`, `FILESHUTTLE_WORKER_HUB`, `FILESHUTTLE_WORKER_NAME`,
+`FILESHUTTLE_WORKER_ALLOWED_FOLDERS`.
+
+- **Offline machines.** A machine is online while its socket is open and offline
+  after about 90 s of silence. "Run now" for an offline machine is queued on the hub
+  ("Waiting for <machine>"), can be cancelled, and is sent once, when it reconnects.
+  A scheduled run missed while it was offline is not queued.
+- **Reports are never lost.** A worker writes each finished run to a local outbox
+  and removes it only after the hub acknowledges it; the hub stores a run once.
+- **One machine per job.** A mapping belongs to the machine picked when it is made
+  and a job can only use that machine's mappings. Removing a machine revokes its token
+  (history stays); it is refused while the machine still has mappings or jobs.
+- **Versions.** The Machines list says when a worker is older than the hub.
+- Folder tools in Claude's MCP server still read the hub's own machine.
+- With a Tailscale allowed-logins list on the hub, the worker machine's login must be
+  on it.
 
 Build it with `npm run build:server` (one file, `dist/server/fileshuttle-server.cjs`,
 no `electron` in its imports; a test enforces that).

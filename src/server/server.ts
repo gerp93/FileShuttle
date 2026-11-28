@@ -10,6 +10,7 @@ import { getLocalWorkerId } from '../main/database/workers';
 import { createHandlers } from '../main/api/handlers';
 import { HTTP_CHANNELS } from '../main/api/channels';
 import { Hub } from '../main/hub/hub';
+import { WorkerGateway } from '../main/hub/workerGateway';
 import { InProcessSystem, startInProcessWorker } from '../main/worker/inProcess';
 import { RemoteServer } from '../main/remote/server';
 import { callLogPath, createMcpHandler } from '../main/mcp/mcpEndpoint';
@@ -73,7 +74,9 @@ export async function startServer(
     getLogPath: () => callLogPath(config.dataDir),
   });
 
+  const gateway = new WorkerGateway({ getDb: () => db, hub, log: (message) => log(`workers: ${message}`) });
   const web = new RemoteServer({
+    workers: { pair: gateway.pair, accept: gateway.accept },
     port: config.port,
     host: config.host,
     staticDir: config.webDir,
@@ -122,6 +125,7 @@ export async function startServer(
       stopped = true;
       worker?.stop();
       retention.shutdown();
+      gateway.stop();
       await web.stop();
       flushDatabase(db);
       db.close();

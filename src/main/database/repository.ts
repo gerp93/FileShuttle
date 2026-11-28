@@ -125,9 +125,25 @@ function createMappingRows(db: Database, input: CreateMappingInput, workerId: st
 }
 
 /** Creates a mapping on the given worker (this PC's `local` worker when none is named). */
+/** A machine a mapping or job may be put on: it exists and has not been removed. */
+function assertUsableWorker(db: Database, workerId: string): void {
+  const row = queryOne(db, 'SELECT removed_at FROM workers WHERE id = ?', [workerId]);
+  if (!row) throw new Error('That machine does not exist.');
+  if (row.removed_at) throw new Error('That machine has been removed.');
+}
+
+/** A step that chains into another mapping must stay on the same machine. */
+function assertChainOnSameWorker(db: Database, nextMappingId: number | null, workerId: string): void {
+  if (nextMappingId == null) return;
+  const owner = ownerOf(db, 'mappings', nextMappingId);
+  if (owner != null && owner !== workerId) throw new Error('A mapping can only chain into a mapping on the same machine.');
+}
+
 export function createMapping(db: Database, input: CreateMappingInput, workerId?: string): number {
   return transaction(db, () => {
-    const owner = workerId ?? getLocalWorkerId(db);
+    const owner = workerId ?? input.workerId ?? getLocalWorkerId(db);
+    assertUsableWorker(db, owner);
+    assertChainOnSameWorker(db, input.nextMappingId, owner);
     const id = createMappingRows(db, input, owner);
     bumpScheduleVersion(db, owner);
     return id;
@@ -165,6 +181,11 @@ function updateMappingRows(db: Database, mappingId: number, input: UpdateMapping
 
 export function updateMapping(db: Database, mappingId: number, input: UpdateMappingInput): void {
   transaction(db, () => {
+    const owner = ownerOf(db, 'mappings', mappingId);
+    if (owner && input.workerId && input.workerId !== owner) {
+      throw new Error('A mapping cannot be moved to another machine.');
+    }
+    if (owner) assertChainOnSameWorker(db, input.nextMappingId, owner);
     updateMappingRows(db, mappingId, input);
     bumpOwner(db, 'mappings', mappingId);
   });
@@ -503,7 +524,7 @@ function replaceJobSteps(db: Database, jobId: number, mappingIds: number[], work
   for (const mappingId of mappingIds) {
     const owner = ownerOf(db, 'mappings', mappingId);
     if (owner != null && owner !== workerId) {
-      throw new Error('A job can only use mappings that belong to the same worker as the job.');
+      throw new Error('A job can only use mappings from one machine, and these belong to different machines.');
     }
   }
   run(db, 'DELETE FROM job_steps WHERE job_id = ?', [jobId]);
@@ -543,7 +564,10 @@ function createJobRows(db: Database, input: CreateJobInput, workerId: string): n
 /** Creates a job on the given worker (this PC's `local` worker when none is named). */
 export function createJob(db: Database, input: CreateJobInput, workerId?: string): number {
   return transaction(db, () => {
-    const owner = workerId ?? getLocalWorkerId(db);
+    // A job runs on the machine its steps belong to; with no steps it is the local worker's.
+    const firstOwner = input.mappingIds.length ? ownerOf(db, 'mappings', input.mappingIds[0]) : null;
+    const owner = workerId ?? firstOwner ?? getLocalWorkerId(db);
+    assertUsableWorker(db, owner);
     const id = createJobRows(db, input, owner);
     bumpScheduleVersion(db, owner);
     return id;

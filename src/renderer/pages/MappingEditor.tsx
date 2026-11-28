@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CreateMappingInput, FilterRule, mappingInUseMessage, StepPreview } from '../../shared/types';
+import { CreateMappingInput, FilterRule, mappingInUseMessage, StepPreview, WorkerInfo } from '../../shared/types';
 import { normalizeFilterGroups } from '../../shared/filterGroups';
 import { cleanFolderInput, validateMappingPaths } from '../../shared/pathSafety';
 import { validateFilters } from '../../shared/validation';
@@ -40,6 +40,8 @@ export default function MappingEditor() {
   const [keepNewestEnabled, setKeepNewestEnabled] = useState(false);
   const [keepNewestCount, setKeepNewestCount] = useState('3');
   const [keepNewestPerExtension, setKeepNewestPerExtension] = useState(false);
+  const [workers, setWorkers] = useState<WorkerInfo[]>([]);
+  const [workerId, setWorkerId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blockedJobs, setBlockedJobs] = useState<string[] | null>(null);
@@ -47,10 +49,22 @@ export default function MappingEditor() {
   const [previewing, setPreviewing] = useState(false);
 
   useEffect(() => {
+    void window.fileshuttleAPI.workers.list().then(
+      (list) => {
+        setWorkers(list);
+        // A new mapping starts on this computer (the local machine) unless another is picked.
+        setWorkerId((current) => current ?? list.find((w) => w.kind === 'local')?.id ?? null);
+      },
+      () => undefined
+    );
+  }, []);
+
+  useEffect(() => {
     if (mappingId) {
       void window.fileshuttleAPI.mappings.get(mappingId).then((record) => {
         if (!record) return;
         setName(record.name);
+        setWorkerId(record.workerId);
         setSourcePath(record.sourcePath);
         setDestPath(record.destPath);
         setActionType(record.actionType);
@@ -107,6 +121,7 @@ export default function MappingEditor() {
 
     setError('');
     return {
+      workerId: workerId ?? undefined,
       name: trimmedName,
       sourcePath: trimmedSource,
       destPath: trimmedDest,
@@ -129,7 +144,7 @@ export default function MappingEditor() {
     const checks: Array<[string, string, 'source' | 'destination']> = [['Source folder', input.sourcePath, 'source']];
     if (input.actionType !== 'delete') checks.push(['Destination folder', input.destPath, 'destination']);
     for (const [label, folder, role] of checks) {
-      const result = await window.fileshuttleAPI.dialogs.checkFolder(folder, role);
+      const result = await window.fileshuttleAPI.dialogs.checkFolder(folder, role, input.workerId ?? null);
       if (result.status === 'invalid' || result.status === 'not_folder') return `${label}: ${result.message}`;
     }
     return null;
@@ -196,6 +211,8 @@ export default function MappingEditor() {
     }
   };
 
+  const selected = workers.find((w) => w.id === workerId) ?? null;
+
   return (
     <div>
       <h1 className="page-title">{isNew ? 'New Mapping' : 'Edit Mapping'}</h1>
@@ -205,7 +222,31 @@ export default function MappingEditor() {
         <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
       </label>
 
+      {isNew && workers.length > 1 && (
+        <label className="field" style={{ marginBottom: 12 }}>
+          Machine (the computer whose folders these are)
+          <select
+            value={workerId ?? ''}
+            onChange={(e) => {
+              setWorkerId(e.target.value);
+              setSourcePath('');
+              setDestPath('');
+            }}
+          >
+            {workers.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+                {w.kind === 'remote' && !w.online ? ' (offline)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {!isNew && selected && workers.length > 1 && <p className="muted">Machine: {selected.name}</p>}
+
       <FolderField
+        workerId={workerId}
+        remote={selected?.kind === 'remote'}
         label="Source folder"
         value={sourcePath}
         role="source"
@@ -248,6 +289,8 @@ export default function MappingEditor() {
 
       {actionType !== 'delete' && (
         <FolderField
+          workerId={workerId}
+          remote={selected?.kind === 'remote'}
           label="Destination folder"
           value={destPath}
           role="destination"

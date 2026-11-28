@@ -15,6 +15,9 @@ import { WatcherService } from '../scheduler/watcher';
 import type { RunSettings } from '../settings/appSettings';
 import type { JobSource } from './jobSource';
 import { JobAlreadyRunningError, RunExecutor } from './runExecutor';
+import type { AllowedFolders } from './allowedFolders';
+import { jobFinishedAckId } from '../../shared/workerProtocol';
+import type { Outbox } from './outbox';
 
 export type { JobSource } from './jobSource';
 
@@ -34,6 +37,22 @@ export interface WorkerRuntimeOptions {
   onBackgroundRunFinished?: (kind: 'scheduled' | 'watched folder', jobId: number, result: RunResult) => void;
   /** Send heartbeats (the app does; most tests do not need the timer). */
   heartbeat?: boolean;
+  /** The secret a remote worker proves itself with (sent in the hello, never kept anywhere else). */
+  token?: string;
+  /** What kind of computer this is, for the hub's machine list. */
+  platform?: string;
+  /** Remote workers only: the folders this machine allows. Absent means no limit (the desktop's own worker). */
+  allowedFolders?: AllowedFolders;
+  /** Remote workers only: finished runs wait here until the hub has acknowledged them. */
+  outbox?: Outbox;
+  /** Remote workers only: the last schedule the hub sent, kept so the worker can run while the hub is away. */
+  scheduleStore?: ScheduleStore;
+}
+
+/** Where a remote worker keeps its copy of the schedule between starts. */
+export interface ScheduleStore {
+  load(): { version: number; schedule: ScheduleSnapshot } | null;
+  save(version: number, schedule: ScheduleSnapshot): void;
 }
 
 /**
@@ -55,9 +74,10 @@ export class WorkerRuntime implements JobSource {
       workerId: opts.workerId,
       getJob: (jobId) => this.schedule.jobs.find((job) => job.id === jobId) ?? null,
       readRunSettings: opts.readRunSettings,
+      guard: opts.allowedFolders,
       emit: (message) => {
         if (message.type === 'jobFinished' && message.completed) this.markLastRun(message.jobId, message.startedAt);
-        this.send(message);
+        this.report(message);
       },
     });
     this.scheduler = new SchedulerService(this, (jobId, result) => opts.onBackgroundRunFinished?.('scheduled', jobId, result));
@@ -79,15 +99,40 @@ export class WorkerRuntime implements JobSource {
 
   // Lifecycle -------------------------------------------------------------
 
-  /** Introduces the worker to the hub, which answers with the current schedule. */
+  /**
+   * Starts from the schedule saved the last time the hub sent one, so a remote worker keeps its
+   * timers and watchers even when the hub is unreachable at start. Returns whether there was one.
+   */
+  loadStoredSchedule(): boolean {
+    const stored = this.opts.scheduleStore?.load();
+    if (!stored) return false;
+    this.schedule = stored.schedule;
+    this.scheduleVersion = stored.version;
+    this.scheduler.reloadJobs();
+    this.watcher.reloadJobs();
+    if (!this.everApplied) {
+      this.everApplied = true;
+      this.scheduler.catchUp();
+      this.watcher.catchUp();
+    }
+    return true;
+  }
+
+  /**
+   * Introduces the worker to the hub, which answers with the current schedule. A remote worker calls
+   * this again on every reconnect; whatever the hub has not acknowledged yet is sent again after it.
+   */
   connect(): void {
     this.send({
       type: 'hello',
       workerId: this.opts.workerId,
+      ...(this.opts.token ? { token: this.opts.token } : {}),
       appVersion: this.opts.appVersion,
+      ...(this.opts.platform ? { platform: this.opts.platform } : {}),
       protocolVersion: PROTOCOL_VERSION,
       scheduleVersion: this.scheduleVersion,
     });
+    for (const pending of this.opts.outbox?.pending() ?? []) this.send(pending);
     if (this.opts.heartbeat && !this.heartbeatTimer) {
       this.heartbeatTimer = setInterval(() => this.send(this.heartbeatMessage()), HEARTBEAT_INTERVAL_MS);
       this.heartbeatTimer.unref?.();
@@ -114,6 +159,14 @@ export class WorkerRuntime implements JobSource {
     this.opts.endpoint.send(message);
   }
 
+  /** Reports something that must not be lost: it is kept on disk first when there is an outbox. */
+  private report(message: WorkerToHub): void {
+    if (this.opts.outbox && (message.type === 'runFinished' || message.type === 'jobFinished')) {
+      this.opts.outbox.add(message.type === 'runFinished' ? message.runUid : jobFinishedAckId(message), message);
+    }
+    this.send(message);
+  }
+
   private heartbeatMessage(): WorkerToHub {
     return { type: 'heartbeat', workerId: this.opts.workerId, sentAt: new Date().toISOString() };
   }
@@ -128,12 +181,21 @@ export class WorkerRuntime implements JobSource {
       this.applySchedule(message.version, message.schedule);
       return;
     }
+    if (message.type === 'ack') {
+      this.opts.outbox?.remove(message.id);
+      return;
+    }
     void this.handleCommand(message);
   }
 
   private applySchedule(version: number, schedule: ScheduleSnapshot): void {
     this.schedule = schedule;
     this.scheduleVersion = version;
+    try {
+      this.opts.scheduleStore?.save(version, schedule);
+    } catch {
+      // The copy is only a convenience for when the hub is away; the live schedule is what counts.
+    }
     this.scheduler.reloadJobs();
     this.watcher.reloadJobs();
     this.send({ type: 'scheduleAck', workerId: this.opts.workerId, version });
@@ -169,15 +231,23 @@ export class WorkerRuntime implements JobSource {
       case 'preview': {
         const unzipLimits = this.opts.readRunSettings().unzipLimits;
         const steps = [];
-        for (const config of command.configs) steps.push(await previewMapping(config, { unzipLimits }));
+        for (const config of command.configs) {
+          const refused = await this.opts.allowedFolders?.problemWithMapping(config);
+          if (refused) throw new Error(refused);
+          steps.push(await previewMapping(config, { unzipLimits }));
+        }
         return steps;
       }
       case 'undo':
         return this.executor.undo(command);
-      case 'listFolder':
-        return listFolder(command.folder);
-      case 'checkFolder':
-        return checkFolder(command.folder, command.role);
+      case 'listFolder': {
+        const guard = this.opts.allowedFolders;
+        return guard ? guard.limitListing(command.folder, (p) => listFolder(p)) : listFolder(command.folder);
+      }
+      case 'checkFolder': {
+        const refused = await this.opts.allowedFolders?.checkOrRefuse(command.folder);
+        return refused ?? checkFolder(command.folder, command.role);
+      }
     }
   }
 }

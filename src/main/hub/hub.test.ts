@@ -137,6 +137,7 @@ describe('a report delivered twice', () => {
     const workerId = getLocalWorkerId(db);
     hub.attachWorker(workerId, endpoint);
 
+    report({ type: 'hello', workerId, appVersion: '1.0.0', protocolVersion: PROTOCOL_VERSION, scheduleVersion: 0 });
     const message: RunFinishedMessage = {
       type: 'runFinished',
       workerId,

@@ -16,6 +16,8 @@ import type {
   MappingRecord,
   PurgeResult,
   McpTokenInfo,
+  PairCodeInfo,
+  WorkerInfo,
   RemoteSettingsInput,
   RemoteState,
   RunAllSummary,
@@ -80,9 +82,10 @@ interface FileShuttleAPI {
   };
   dialogs: {
     pickFolder: (title: string, startAt?: string) => Promise<string | null>;
-    checkFolder: (folder: string, role: FolderRole) => Promise<FolderCheck>;
+    /** `workerId` names the machine whose folders are meant (none = the one running the app). */
+    checkFolder: (folder: string, role: FolderRole, workerId?: string | null) => Promise<FolderCheck>;
     /** Subfolders of a folder (the roots with no path). What the phone's folder browser uses. */
-    listFolder: (folder?: string | null) => Promise<FolderListing>;
+    listFolder: (folder?: string | null, workerId?: string | null) => Promise<FolderListing>;
   };
   shell: {
     openPath: (filePath: string) => Promise<string>;
@@ -104,6 +107,12 @@ interface FileShuttleAPI {
     setPassword: (password: string) => Promise<RemoteState>;
   };
   /** MCP access tokens (Settings, desktop only). A new token is returned once and never kept. */
+  /** Machines that run jobs (Settings > Machines). */
+  workers: {
+    list: () => Promise<WorkerInfo[]>;
+    createPairCode: () => Promise<PairCodeInfo>;
+    remove: (workerId: string) => Promise<boolean>;
+  };
   mcp: {
     listTokens: () => Promise<McpTokenInfo[]>;
     createToken: (name: string) => Promise<{ name: string; token: string }>;
