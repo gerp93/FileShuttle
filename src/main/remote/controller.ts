@@ -2,6 +2,7 @@ import type { Database } from '../database/sqlite';
 import type { HandlerMap } from '../api/handlers';
 import { HTTP_CHANNELS } from '../api/channels';
 import { RemoteServer, BIND_HOST } from './server';
+import type { McpHandler } from '../mcp/mcpEndpoint';
 import {
   checkRemotePassword,
   getRemoteSettings,
@@ -13,6 +14,8 @@ import type { RemoteSettingsInput, RemoteState } from '../../shared/types';
 export interface RemoteControllerDeps {
   getDb: () => Database;
   handlers: HandlerMap;
+  /** The MCP endpoint, mounted at /mcp. */
+  mcp?: McpHandler;
   /** The built renderer the phone is served. */
   staticDir: string;
   log?: (message: string) => void;
@@ -48,6 +51,7 @@ export class RemoteController {
       port: settings.port,
       staticDir: this.deps.staticDir,
       handlers: this.deps.handlers,
+      mcp: this.deps.mcp,
       allowedChannels: HTTP_CHANNELS,
       isPasswordSet: () => getRemoteSettings(this.deps.getDb()).hasPassword,
       checkPassword: (password) => checkRemotePassword(this.deps.getDb(), password),

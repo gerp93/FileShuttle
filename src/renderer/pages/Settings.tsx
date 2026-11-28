@@ -11,6 +11,7 @@ import { useTheme } from '../context/ThemeContext';
 import { FletThemeId, getThemeList } from '../utils/themes';
 import { isWebMode } from '../utils/platform';
 import RemoteAccessSection from '../components/RemoteAccessSection';
+import McpAccessSection from '../components/McpAccessSection';
 
 export default function Settings() {
   // On the phone the PC-only parts (start-up, database file, updates, remote access itself) are hidden.
@@ -264,6 +265,10 @@ export default function Settings() {
           <hr className="divider" />
 
           <RemoteAccessSection />
+
+          <hr className="divider" />
+
+          <McpAccessSection />
         </>
       )}
 

@@ -1,5 +1,4 @@
 import type { RunProgressEvent } from '../shared/types';
-import type { AgentApi } from '../shared/agentTypes';
 
 type FileShuttleAPI = Window['fileshuttleAPI'];
 
@@ -102,21 +101,9 @@ function closeStreamIfIdle(): void {
   retry = null;
 }
 
-const agent: AgentApi = {
-  send: () => unavailable(),
-  interrupt: () => unavailable(),
-  reset: () => unavailable(),
-  approve: () => unavailable(),
-  login: () => unavailable(),
-  submitLoginCode: () => unavailable(),
-  authStatus: () => unavailable(),
-  onEvent: () => () => undefined,
-};
-
 /** The same API the desktop preload exposes, over fetch and Server-Sent Events. */
 export function createWebApi(): FileShuttleAPI {
   return {
-    agent,
     mappings: {
       list: () => rpc('mappings:list'),
       get: (id) => rpc('mappings:get', id),
@@ -192,6 +179,11 @@ export function createWebApi(): FileShuttleAPI {
       getSettings: () => unavailable(),
       setSettings: () => unavailable(),
       setPassword: () => unavailable(),
+    },
+    mcp: {
+      listTokens: () => unavailable(),
+      createToken: () => unavailable(),
+      revokeToken: () => unavailable(),
     },
     updates: {
       check: () => unavailable(),

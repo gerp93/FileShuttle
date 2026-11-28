@@ -32,6 +32,8 @@ export interface RemoteServerOptions {
   checkPassword: (password: string) => Promise<boolean>;
   /** Tailscale logins allowed in; empty means no restriction. Read on every request. */
   getAllowedLogins: () => string[];
+  /** The MCP endpoint (POST /mcp). It does its own auth (bearer token); null/absent leaves /mcp unserved. */
+  mcp?: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
   onError?: (message: string) => void;
   sessionIdleMs?: number;
   maxLoginFailures?: number;
@@ -281,7 +283,9 @@ export class RemoteServer {
         return this.json(res, 400, { ok: false, error: 'Bad request.' });
       }
 
-      if (pathname === '/api' || pathname.startsWith('/api/')) {
+      if (pathname === '/mcp' && this.opts.mcp) {
+        await this.opts.mcp(req, res);
+      } else if (pathname === '/api' || pathname.startsWith('/api/')) {
         await this.handleApi(req, res, pathname);
       } else {
         await this.serveStatic(req, res, pathname);

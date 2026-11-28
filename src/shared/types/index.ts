@@ -273,6 +273,13 @@ export interface RemoteSettingsInput {
   allowedLogins?: string[];
 }
 
+/** An MCP access token as shown in Settings and by the CLI. The token itself is never kept. */
+export interface McpTokenInfo {
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
 export const DEFAULT_REMOTE_PORT = 8765;
 export const MIN_REMOTE_PASSWORD_LENGTH = 8;
 

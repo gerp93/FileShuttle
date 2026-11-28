@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AgentApi, AgentEvent } from '../shared/agentTypes';
 import {
   CreateJobInput,
   CreateMappingInput,
@@ -15,6 +14,7 @@ import {
   LogRetentionId,
   MappingRecord,
   PurgeResult,
+  McpTokenInfo,
   RemoteSettingsInput,
   RemoteState,
   RunAllSummary,
@@ -30,7 +30,6 @@ import {
 } from '../shared/types';
 
 export interface FileShuttleAPI {
-  agent: AgentApi;
   mappings: {
     list: () => Promise<MappingRecord[]>;
     get: (id: number) => Promise<MappingRecord | null>;
@@ -103,28 +102,18 @@ export interface FileShuttleAPI {
     setSettings: (input: RemoteSettingsInput) => Promise<RemoteState>;
     setPassword: (password: string) => Promise<RemoteState>;
   };
+  /** MCP access tokens (Settings, desktop only). A new token is returned once and never kept. */
+  mcp: {
+    listTokens: () => Promise<McpTokenInfo[]>;
+    createToken: (name: string) => Promise<{ name: string; token: string }>;
+    revokeToken: (name: string) => Promise<boolean>;
+  };
   updates: {
     check: () => Promise<UpdateCheckResult>;
   };
 }
 
 const api: FileShuttleAPI = {
-  agent: {
-    send: (text) => ipcRenderer.invoke('agent:send', text),
-    interrupt: () => ipcRenderer.invoke('agent:interrupt'),
-    reset: () => ipcRenderer.invoke('agent:reset'),
-    approve: (requestId, allow) => ipcRenderer.invoke('agent:approve', requestId, allow),
-    login: () => ipcRenderer.invoke('agent:login'),
-    submitLoginCode: (code) => ipcRenderer.invoke('agent:loginCode', code),
-    authStatus: () => ipcRenderer.invoke('agent:authStatus'),
-    onEvent: (listener) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => listener(payload);
-      ipcRenderer.on('agent:event', handler);
-      return () => {
-        ipcRenderer.removeListener('agent:event', handler);
-      };
-    },
-  },
   mappings: {
     list: () => ipcRenderer.invoke('mappings:list'),
     get: (id) => ipcRenderer.invoke('mappings:get', id),
@@ -199,6 +188,11 @@ const api: FileShuttleAPI = {
     getSettings: () => ipcRenderer.invoke('remote:getSettings'),
     setSettings: (input) => ipcRenderer.invoke('remote:setSettings', input),
     setPassword: (password) => ipcRenderer.invoke('remote:setPassword', password),
+  },
+  mcp: {
+    listTokens: () => ipcRenderer.invoke('mcp:listTokens'),
+    createToken: (name) => ipcRenderer.invoke('mcp:createToken', name),
+    revokeToken: (name) => ipcRenderer.invoke('mcp:revokeToken', name),
   },
   updates: {
     check: () => ipcRenderer.invoke('updates:check'),

@@ -5,6 +5,7 @@ import { prepareDataDir, startServer } from './server';
 import { flushDatabase, initDatabase } from '../main/database/schema';
 import { setStartupLogQuiet } from '../main/startupLog';
 import { setRemotePassword } from '../main/remote/remoteSettings';
+import { createMcpToken, listMcpTokens, revokeMcpToken } from '../main/mcp/tokens';
 
 export const USAGE = `FileShuttle server ${APP_VERSION}
 
@@ -14,6 +15,9 @@ Usage: fileshuttle-server <command>
   hub            the hub only (database, schedules, web UI and API); runs nothing itself
   worker         a worker for a remote hub (not available yet)
   set-password   set the password for the web UI (typed twice, or one line on stdin)
+  mcp-token create <name>   make an access token for the MCP server (shown once)
+  mcp-token list            list the tokens (names and dates, never the tokens)
+  mcp-token revoke <name>   remove a token
   --version      print the version
 
 Settings come from the environment (see /etc/fileshuttle-server/server.env):
@@ -120,6 +124,53 @@ async function setPasswordCommand(): Promise<number> {
   return 0;
 }
 
+/** `mcp-token create|list|revoke`. Exit codes: 0 done, 1 failed, 2 usage. */
+async function mcpTokenCommand(args: string[]): Promise<number> {
+  const action = args[0];
+  const name = args.slice(1).join(' ').trim();
+  const usage = (): number => {
+    console.error('Usage: fileshuttle-server mcp-token create <name> | list | revoke <name>');
+    return 2;
+  };
+  if (action === 'create' || action === 'revoke') {
+    if (!name) return usage();
+  } else if (action !== 'list' || args.length > 1) {
+    return usage();
+  }
+  const config = parseServerConfig();
+  const dbPath = prepareDataDir(config);
+  setStartupLogQuiet(true);
+  const db = await initDatabase(dbPath);
+  try {
+    if (action === 'create') {
+      const made = createMcpToken(db, name); // throws a readable message for a bad or repeated name
+      flushDatabase(db);
+      console.log(made.token);
+      console.error(
+        `Token "${made.name}" made. It is shown only now; copy it. To use it with Claude Code:\n` +
+          `  claude mcp add --transport http fileshuttle https://<host>/mcp --header "Authorization: Bearer ${made.token}"`
+      );
+      return 0;
+    }
+    if (action === 'revoke') {
+      const removed = revokeMcpToken(db, name);
+      flushDatabase(db);
+      if (!removed) {
+        console.error(`There is no token named "${name}".`);
+        return 1;
+      }
+      console.log(`Token "${name}" revoked.`);
+      return 0;
+    }
+    const tokens = listMcpTokens(db);
+    if (tokens.length === 0) console.log('No MCP tokens. MCP is off until one is made.');
+    for (const t of tokens) console.log(`${t.name}\tmade ${t.createdAt}\t${t.lastUsedAt ? `last used ${t.lastUsedAt}` : 'never used'}`);
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
 function waitForSignal(stop: () => Promise<void>): Promise<void> {
   return new Promise((resolve) => {
     let stopping = false;
@@ -165,6 +216,8 @@ export async function runCli(args: string[]): Promise<number> {
         return 2;
       case 'set-password':
         return await setPasswordCommand();
+      case 'mcp-token':
+        return await mcpTokenCommand(args.slice(1));
       default:
         console.error(USAGE);
         return 2;

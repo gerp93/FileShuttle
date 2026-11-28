@@ -21,8 +21,8 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 - Headless server, next steps (phase 4a is done: `fileshuttle-server` .deb,
   `hub`/`all`, loopback + `tailscale serve`). Still to do: the `worker` command
   and its network transport, worker tokens and pairing, an outbox for a worker
-  that is offline, a Windows build of the server, and replacing the in-app
-  assistant with MCP. Not checked yet: the .deb built and installed by the real
+  that is offline, a Windows build of the server. Phase 4b (MCP, assistant retired) is
+  done but not tried against a real MCP client. Not checked yet: the .deb built and installed by the real
   workflow, Node SEA's `process.argv` handling, and a real tailnet.
 
 - Windows Task Scheduler integration so scheduled mappings can run even

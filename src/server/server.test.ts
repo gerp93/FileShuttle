@@ -3,6 +3,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { listTree, makeTempDir, removeDir, writeFile } from '../main/engine/testUtils';
 import { setRemotePassword } from '../main/remote/remoteSettings';
+import { createMcpToken } from '../main/mcp/tokens';
 import { setDefaultTrash } from '../main/engine/trash';
 import { startServer, RunningServer } from './server';
 import type { ServerConfig } from './config';
@@ -122,6 +123,37 @@ linuxOnly('headless server (all)', () => {
     const undo = await (await post('/api/rpc/history:undo', [history.result[0].id], cookie)).json();
     expect(undo.ok).toBe(true);
     expect(fs.readFileSync(path.join(src, 'old.txt'), 'utf8')).toBe('precious');
+  });
+
+  it('serves MCP with a bearer token only, and keeps token management off HTTP', async () => {
+    running = await startServer('all', config, () => undefined);
+    const rpc = (body: unknown, token?: string) =>
+      fetch(base() + '/mcp', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(body),
+      });
+    // Off until a token exists.
+    expect((await rpc({ jsonrpc: '2.0', id: 1, method: 'ping' })).status).toBe(403);
+
+    const { token } = createMcpToken(running.db, 'e2e');
+    expect((await rpc({ jsonrpc: '2.0', id: 1, method: 'ping' })).status).toBe(401);
+    const init = await (await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }, token)).json();
+    expect(init.result.serverInfo.name).toBe('fileshuttle');
+    const list = await (await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_workers', arguments: {} } }, token)).json();
+    expect(list.result.isError).toBeUndefined();
+    expect(list.result.content[0].text).toMatch(/local/i);
+
+    // A password session never works as MCP auth, and tokens cannot be made over HTTP.
+    await setRemotePassword(running.db, PASSWORD);
+    const cookie = await signIn();
+    const withCookie = await fetch(base() + '/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    expect(withCookie.status).toBe(401);
+    expect((await post('/api/rpc/mcp:createToken', ['x'], cookie)).status).toBe(404);
   });
 
   it('hub mode has no local worker', async () => {

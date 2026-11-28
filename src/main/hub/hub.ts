@@ -58,11 +58,10 @@ interface Pending {
  * forwards commands (run, cancel, preview, undo, folder lookups) to the right worker by request
  * id, and turns the workers' reports into database rows (run history above all).
  *
- * The window, the phone page and the assistant's tools all reach a worker through here.
- * One exception is kept direct on purpose: the assistant tools (agent/tools.ts) still call
- * previewMapping, checkFolder and the assistant's own recursive folder listing in-process, because
- * they run on this machine's own folders and routing them would mean new command shapes
- * for no gain until a second worker exists.
+ * The window, the phone page and the MCP tools (mcp/tools.ts) all reach a worker through here.
+ * One exception is kept direct on purpose: the MCP tools' draft checks (checkMapping) and their
+ * recursive list_folder read this machine's own folders in-process, because routing them would
+ * mean new command shapes for no gain until a second worker exists.
  */
 export class Hub {
   private links = new Map<string, WorkerLink>();
@@ -85,6 +84,11 @@ export class Hub {
   /** Where progress for every run, manual or scheduled, goes (the main process forwards it to the windows and phones). */
   setProgressListener(listener: ((event: RunProgressEvent) => void) | null): void {
     this.progressListener = listener;
+  }
+
+  /** Ids of the workers that are attached right now. */
+  connectedWorkerIds(): string[] {
+    return [...this.links.keys()];
   }
 
   /** Jobs that are queued or running right now, with their latest progress. */

@@ -54,41 +54,56 @@ come from there rather than being reinvented locally.
 - **Background/tray mode** — closing the window keeps FileShuttle running
   in the system tray so schedules keep firing; optional start-at-login
   toggle in Settings.
-- **Assistant** — a chat panel (the robot button, bottom of the left rail) that
-  sets up mappings and jobs from a plain-language description and asks for
-  whatever you left out. See [Assistant](#assistant).
+- **Claude (MCP)** — manage FileShuttle by talking to Claude Code or any MCP
+  client, over your tailnet. See [Talk to Claude (MCP)](#talk-to-claude-mcp).
 - **Phone access** — open the whole UI from your phone over Tailscale (off by
   default). See [Open it from your phone](#open-it-from-your-phone).
 - **Theming** — pick any [VisualAssault](https://github.com/gerp93/VisualAssault)
   color theme.
 
-## Assistant
+## Talk to Claude (MCP)
 
-The chat panel slides out from the right on every page. Describe what you want
-("move PDFs older than 30 days from Downloads to D:\Archive every night") and it
-works out the mapping and job, checks the folders, previews what it would do,
-and asks before saving anything.
+FileShuttle has a built-in MCP server, so Claude (Claude Code, Claude Desktop, or
+any client that speaks MCP over HTTP) can read your mappings, jobs and history,
+preview what a job would do, and set things up when you ask. It is **off until you
+make a token**, and it is only reachable the way the phone UI is: on
+`127.0.0.1` behind `tailscale serve` (never `tailscale funnel`). In the desktop app
+it runs while Phone access is switched on; the headless server always serves it.
 
-It runs on the Claude runtime bundled with the app and signs in with your own
-Claude account (the panel walks you through it; FileShuttle never sees your
-password).
+Make a token (shown once; only a hash is kept):
 
-What it can do:
+- desktop: **Settings → Claude access (MCP)**;
+- server: `fileshuttle-server mcp-token create <name>` (also `list` and `revoke <name>`).
 
-- read your mappings, jobs and run history, and review them for risky settings;
-- list the names, sizes and modified dates of the files in a folder (never what
-  is inside them);
-- preview a mapping or job — a dry run that changes nothing;
-- save mappings and jobs, once you approve each one on an approval card.
+Then connect Claude Code:
 
-What it can't do, enforced in code (`src/main/agent/`) rather than by its
-instructions: run a job, undo a run, delete a mapping or job, switch a job on, or
-touch any file. **Every job it saves is switched off**; open the Jobs page,
-review it (Preview shows what it would do), and turn it on yourself. It is also
-given none of Claude's built-in tools and none of your other Claude connectors.
+```
+claude mcp add --transport http fileshuttle https://<host>/mcp --header "Authorization: Bearer <token>"
+```
 
-File and folder *names* it looks at are sent to Claude to answer you; file
-contents never are.
+Rules, enforced in code rather than by instructions:
+
+- Every request needs the bearer token (a phone password session does not work
+  here), a request with a foreign `Origin` header is refused, and the Tailscale
+  allow list applies when one is set. Revoking a token cuts that client off at once.
+- Tools are narrow: list/inspect workers, mappings, jobs and run history; check and
+  list a folder (names, sizes and dates, never contents); validate and preview
+  (dry runs); save mappings and jobs; switch a job on or off; run or cancel a job;
+  delete a mapping or job. There is no way to touch a file directly.
+- **A new job is saved switched off**; an existing job keeps its on/off state.
+  Mappings get no schedule of their own.
+- **Destructive actions need confirmation.** The first call does nothing and returns
+  a description and a one-time code (valid 5 minutes, tied to that exact action).
+  Claude must ask you, then repeat the call with `confirm`. This covers deleting a
+  job or mapping, running or enabling a job that deletes, moves or overwrites, and
+  saving changes that would make a switched-on job do that. Codes live in memory,
+  so a restart voids them.
+- Every tool call and every refused request is logged as one JSON line in
+  `mcp-calls.log` in the data folder (token *name*, tool, arguments with the
+  confirmation code hidden, result, duration). It rotates at about 5 MB.
+
+File and folder *names* the tools return go to whichever model your client uses;
+file contents never do.
 
 ## Open it from your phone
 
@@ -114,7 +129,7 @@ FileShuttle can serve its full UI to your phone's browser over your private
 
 What you get: jobs, mappings, history, undo and settings, with live progress. Folders are
 picked with an in-page folder browser (it lists the PC's folders). Desktop-only things —
-the assistant, database location, start with Windows, update check and "open in
+database location, start with Windows, update check and "open in
 Explorer" — are not offered from the phone, and the Remote access settings
 themselves can only be changed on the PC.
 
@@ -301,9 +316,8 @@ npm run package
   - `worker/` — the worker: run executor, runtime, and the in-process transport
   - `settings/` — app settings split into hub settings and run settings
   - `scheduler/` — interval/daily scheduler and the folder watcher (worker side)
-  - `agent/` — the in-app assistant: `tools.ts` (the only things it can do),
-    `actions.ts` (what saving is allowed to change), `session.ts` (approvals),
-    `prompt.ts`
+  - `mcp/` — the MCP server: `mcpEndpoint.ts` (JSON-RPC over HTTP, auth), `tools.ts` (the only things it can do),
+    `actions.ts` (what saving is allowed to change), `confirmations.ts`, `tokens.ts`, `callLog.ts`
 - `src/server/` — the headless server: `cli.ts` (commands), `config.ts` (env settings), `server.ts` (hub + worker + web), `entry.ts`; built by `vite.server.config.ts`
 - `deploy/` — systemd unit, env file and Debian maintainer scripts for the server package
 - `src/main/preload.ts` — typed bridge to the renderer
