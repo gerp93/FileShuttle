@@ -49,5 +49,8 @@ jobs:
       conffiles: /etc/fileshuttle-server/server.env
       scripts_dir: deploy/debian
       publish: false
+    # The reusable workflow declares contents: write, and a caller may not grant
+    # less than a called workflow asks for (the run fails to start). publish is
+    # false, so nothing is written.
     permissions:
-      contents: read
+      contents: write
