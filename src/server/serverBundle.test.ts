@@ -35,6 +35,9 @@ function importGraph(entry: string): { files: Set<string>; bare: Map<string, str
   return { files, bare };
 }
 
+// The server ships only for Linux (.deb); these use POSIX paths, modes and signals, and run in CI's Linux job.
+const linuxOnly = describe.skipIf(process.platform === 'win32');
+
 describe('the server entry does not import Electron', () => {
   it('has no electron, updater or assistant SDK import anywhere in its source graph', () => {
     const { files, bare } = importGraph(ENTRY);
@@ -49,7 +52,7 @@ describe('the server entry does not import Electron', () => {
   });
 });
 
-describe('the built server bundle', () => {
+linuxOnly('the built server bundle', () => {
   let out: string;
   let bundle: string;
 

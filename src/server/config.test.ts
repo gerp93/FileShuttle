@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { ConfigError, DEFAULT_DATA_DIR, DEFAULT_WEB_DIR, isLoopbackHost, parseServerConfig } from './config';
 import { userArgs } from './cli';
 
-describe('parseServerConfig', () => {
+// The server ships only for Linux (.deb); these use POSIX paths, modes and signals, and run in CI's Linux job.
+const linuxOnly = describe.skipIf(process.platform === 'win32');
+
+linuxOnly('parseServerConfig', () => {
   it('has loopback-only, documented defaults', () => {
     expect(parseServerConfig({})).toEqual({
       dataDir: DEFAULT_DATA_DIR,
@@ -46,7 +49,7 @@ describe('isLoopbackHost', () => {
   it.each(['128.0.0.1', '0.0.0.0', '10.0.0.1', 'localhost.evil.com', ''])('%s is not', (h) => expect(isLoopbackHost(h)).toBe(false));
 });
 
-describe('userArgs', () => {
+linuxOnly('userArgs', () => {
   it('skips the script when run with node', () => {
     expect(userArgs(['/usr/bin/node', '/x/fileshuttle-server.cjs', '--version'], '/usr/bin/node')).toEqual(['--version']);
   });

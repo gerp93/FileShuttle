@@ -24,6 +24,9 @@ afterEach(() => removeDir(root));
 
 const window = () => ({ notBeforeMs: Date.now() - 60_000, notAfterMs: Date.now() + 60_000 });
 
+// The server ships only for Linux (.deb); these use POSIX paths, modes and signals, and run in CI's Linux job.
+const linuxOnly = describe.skipIf(process.platform === 'win32');
+
 describe('trash path encoding', () => {
   it('percent-encodes bytes and round-trips', () => {
     const p = '/srv/my files/ünï#100%.txt';
@@ -45,7 +48,7 @@ describe('trash path encoding', () => {
   });
 });
 
-describe('home trash (same device)', () => {
+linuxOnly('home trash (same device)', () => {
   it('moves a file into files/ with a trashinfo and never leaves a copy behind', async () => {
     const file = path.join(work, 'a b.txt');
     fs.writeFileSync(file, 'hello');
@@ -98,7 +101,7 @@ describe('home trash (same device)', () => {
   });
 });
 
-describe('another drive (per-mount trash)', () => {
+linuxOnly('another drive (per-mount trash)', () => {
   const mount = () => path.join(root, 'mount');
 
   function other(options: { uid?: number } = {}) {

@@ -55,7 +55,10 @@ async function signIn(): Promise<string> {
   return res.headers.get('set-cookie')!.split(';')[0];
 }
 
-describe('headless server (all)', () => {
+// The server ships only for Linux (.deb); these use POSIX paths, modes and signals, and run in CI's Linux job.
+const linuxOnly = describe.skipIf(process.platform === 'win32');
+
+linuxOnly('headless server (all)', () => {
   it('serves the web UI, requires the password, and answers the API', async () => {
     running = await startServer('all', config, () => undefined);
     expect(running.address.host).toBe('127.0.0.1');
